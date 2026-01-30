@@ -1,0 +1,72 @@
+{
+	"name": "rollup-plugin-import-trace",
+	"version": "0.0.0-semantic-release",
+	"description": "Rollup/Vite plugin to track import chains for better error debugging",
+	"keywords": [
+		"rollup",
+		"rollup-plugin",
+		"vite",
+		"vite-plugin",
+		"import",
+		"trace",
+		"debug",
+		"error"
+	],
+	"license": "MIT",
+	"repository": "privatenumber/rollup-plugin-import-trace",
+	"funding": "https://github.com/privatenumber/rollup-plugin-import-trace?sponsor=1",
+	"author": {
+		"name": "Hiroki Osame",
+		"email": "hiroki.osame@gmail.com"
+	},
+	"files": [
+		"dist"
+	],
+	"type": "module",
+	"main": "./dist/index.cjs",
+	"module": "./dist/index.mjs",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		"types": "./dist/index.d.ts",
+		"import": "./dist/index.mjs",
+		"require": "./dist/index.cjs"
+	},
+	"packageManager": "pnpm@10.20.0",
+	"scripts": {
+		"build": "pkgroll --minify",
+		"test": "pnpm build && tsx tests/index.ts",
+		"lint": "lintroll --cache --node .",
+		"type-check": "tsc",
+		"prepack": "pnpm build && clean-pkg-json"
+	},
+	"engines": {
+		"node": ">=20.20.0"
+	},
+	"peerDependencies": {
+		"rollup": "^3.0.0 || ^4.0.0",
+		"vite": "^5.0.0 || ^6.0.0 || ^7.0.0"
+	},
+	"peerDependenciesMeta": {
+		"rollup": {
+			"optional": true
+		},
+		"vite": {
+			"optional": true
+		}
+	},
+	"devDependencies": {
+		"@rollup/plugin-node-resolve": "^16.0.3",
+		"@types/node": "^22.14.1",
+		"clean-pkg-json": "^1.3.0",
+		"concurrently": "^9.2.1",
+		"fs-fixture": "^2.10.1",
+		"lintroll": "^1.24.3",
+		"manten": "^1.10.0",
+		"nano-spawn": "^2.0.0",
+		"pkgroll": "^2.11.2",
+		"rollup": "^4.53.1",
+		"tsx": "^4.20.6",
+		"typescript": "^5.9.3",
+		"vite": "^7.3.1"
+	}
+}

@@ -1,0 +1,48 @@
+name: Test
+
+on:
+  push:
+    branches: [master, develop]
+  pull_request:
+    branches: [master, develop]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Dev Drive
+        if: runner.os == 'Windows'
+        uses: samypr100/setup-dev-drive@v3
+        with:
+          env-mapping: |
+            PNPM_HOME,{{ DEV_DRIVE }}/.pnpm
+            PNPM_STORE_DIR,{{ DEV_DRIVE }}/.pnpm-store
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Lint & Type check
+        if: runner.os == 'Linux'
+        run: pnpm concurrently "pnpm lint" "pnpm type-check"
+
+      - name: Test
+        run: pnpm test

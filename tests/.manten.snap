@@ -1,0 +1,5 @@
+{
+  "rollup-plugin-import-trace › patchErrorWithTrace › appends trace to error message 1": "'Original message\\n' +\n  '\\n' +\n  'Import trace:\\n' +\n  '    /path/to/entry.js\\n' +\n  '    ↳ /path/to/broken.js\\n'",
+  "rollup-plugin-import-trace › patchErrorWithTrace › formats trace with arrow prefix for nested imports 1": "'Error\\n\\nImport trace:\\n    /a.js\\n    ↳ /b.js\\n    ↳ /c.js\\n'",
+  "rollup-plugin-import-trace › patchErrorWithTrace › works with single entry trace 1": "'Original message\\n\\nImport trace:\\n    /path/to/entry.js\\n'"
+}
