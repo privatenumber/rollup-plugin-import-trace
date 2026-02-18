@@ -43,8 +43,9 @@ type RollupVitePlugin = Plugin & {
 
 // Matches indentation of error stack traces
 const indent = '    ';
+const traceHeader = '\n\nImport trace:\n';
 
-const formatTrace = (trace: string[]) => `\n\nImport trace:\n${trace
+const formatTrace = (trace: string[]) => `${traceHeader}${trace
 	.map((filePath, index) => {
 		const prefix = index === 0 ? indent : `${indent}↳ `;
 		return `${prefix}${filePath}`;
@@ -63,7 +64,7 @@ export const patchErrorWithTrace = (error: unknown): void => {
 		&& typeof error.message === 'string'
 		&& 'importTrace' in error
 		&& Array.isArray(error.importTrace)
-		&& !error.message.includes('\n\nImport trace:\n')
+		&& !error.message.includes(traceHeader)
 	) {
 		error.message += formatTrace(error.importTrace);
 	}
@@ -99,9 +100,26 @@ export const importTrace = (): RollupVitePlugin => {
 	// Shadow graph: moduleId -> importerId (first importer wins)
 	const importerMap = new Map<string, string>();
 
+	const recordImports = (
+		importerId: string,
+		importedIds: readonly string[],
+		dynamicallyImportedIds: readonly string[],
+	) => {
+		for (const importedId of importedIds) {
+			if (!importerMap.has(importedId)) {
+				importerMap.set(importedId, importerId);
+			}
+		}
+		for (const importedId of dynamicallyImportedIds) {
+			if (!importerMap.has(importedId)) {
+				importerMap.set(importedId, importerId);
+			}
+		}
+	};
+
 	const getErrorFile = (
-		error: RollupError,
-	) => (error.id ?? error.loc?.file ?? (error as { exporter?: string }).exporter);
+		error: RollupError & { path?: string },
+	) => (error.id ?? error.loc?.file ?? error.exporter ?? error.path);
 
 	// Build trace by walking importer map
 	const getTrace = (moduleId: string): string[] => {
@@ -116,6 +134,17 @@ export const importTrace = (): RollupVitePlugin => {
 		}
 
 		return trace;
+	};
+
+	const attachTrace = (error: RollupError) => {
+		const moduleId = getErrorFile(error);
+		if (moduleId) {
+			const trace = getTrace(moduleId);
+			if (trace.length > 1) {
+				(error as RollupErrorWithTrace).importTrace = trace;
+				patchErrorWithTrace(error);
+			}
+		}
 	};
 
 	// Build trace using Vite's moduleGraph
@@ -149,7 +178,8 @@ export const importTrace = (): RollupVitePlugin => {
 						const module_ = server.moduleGraph.getModuleById(file);
 						const trace = getViteTrace(module_);
 						if (trace.length > 1) {
-							error.message += formatTrace(trace);
+							(error as RollupErrorWithTrace).importTrace = trace;
+							patchErrorWithTrace(error);
 						}
 					}
 					next(error);
@@ -164,18 +194,7 @@ export const importTrace = (): RollupVitePlugin => {
 
 		// Track imports (only fires in build mode, not Vite dev)
 		moduleParsed(moduleInfo) {
-			for (const importedId of moduleInfo.importedIds) {
-				if (!importerMap.has(importedId)) {
-					importerMap.set(importedId, moduleInfo.id);
-				}
-			}
-
-			// Dynamic imports
-			for (const importedId of moduleInfo.dynamicallyImportedIds) {
-				if (!importerMap.has(importedId)) {
-					importerMap.set(importedId, moduleInfo.id);
-				}
-			}
+			recordImports(moduleInfo.id, moduleInfo.importedIds, moduleInfo.dynamicallyImportedIds);
 		},
 
 		buildEnd(error) {
@@ -183,32 +202,30 @@ export const importTrace = (): RollupVitePlugin => {
 				return;
 			}
 
-			// Supplement importerMap with Rollup's module info for modules
-			// whose moduleParsed never fired (happens when a dependency fails
-			// during transform — the entire ancestor chain misses moduleParsed)
-			for (const id of this.getModuleIds()) {
-				const info = this.getModuleInfo(id);
-				if (info) {
-					for (const importedId of info.importedIds) {
-						if (!importerMap.has(importedId)) {
-							importerMap.set(importedId, id);
-						}
-					}
-					for (const importedId of info.dynamicallyImportedIds) {
-						if (!importerMap.has(importedId)) {
-							importerMap.set(importedId, id);
-						}
-					}
-				}
+			const moduleId = getErrorFile(error);
+			if (!moduleId) {
+				return;
 			}
 
-			const moduleId = getErrorFile(error);
-			if (moduleId) {
-				const trace = getTrace(moduleId);
-				if (trace.length > 1) {
-					(error as RollupErrorWithTrace).importTrace = trace;
-					patchErrorWithTrace(error);
+			// Try with existing importerMap first (populated by moduleParsed)
+			let trace = getTrace(moduleId);
+
+			if (trace.length <= 1) {
+				// Supplement importerMap with Rollup's module info for modules
+				// whose moduleParsed never fired (happens when a dependency fails
+				// during transform — the entire ancestor chain misses moduleParsed)
+				for (const id of this.getModuleIds()) {
+					const info = this.getModuleInfo(id);
+					if (info) {
+						recordImports(id, info.importedIds, info.dynamicallyImportedIds);
+					}
 				}
+				trace = getTrace(moduleId);
+			}
+
+			if (trace.length > 1) {
+				(error as RollupErrorWithTrace).importTrace = trace;
+				patchErrorWithTrace(error);
 			}
 		},
 
@@ -216,17 +233,8 @@ export const importTrace = (): RollupVitePlugin => {
 		// buildEnd only receives build-phase errors; output-phase errors
 		// (e.g. MISSING_EXPORT from chunk.generateExports) need renderError
 		renderError(error) {
-			if (!error) {
-				return;
-			}
-
-			const moduleId = getErrorFile(error as RollupError);
-			if (moduleId) {
-				const trace = getTrace(moduleId);
-				if (trace.length > 1) {
-					(error as RollupErrorWithTrace).importTrace = trace;
-					patchErrorWithTrace(error);
-				}
+			if (error) {
+				attachTrace(error as RollupError);
 			}
 		},
 	};

@@ -46,6 +46,18 @@ export default testSuite('patchErrorWithTrace', ({ test }) => {
 		expect(error.message).toBe('Original message');
 	});
 
+	test('is idempotent — calling multiple times does not duplicate trace', () => {
+		const error = new Error('Original message') as ErrorWithTrace;
+		error.importTrace = ['/a.js', '/b.js'];
+
+		patchErrorWithTrace(error);
+		patchErrorWithTrace(error);
+		patchErrorWithTrace(error);
+
+		const occurrences = error.message.split('Import trace:').length - 1;
+		expect(occurrences).toBe(1);
+	});
+
 	test('formats trace with arrow prefix for nested imports', ({ expectSnapshot }) => {
 		const error = new Error('Error') as ErrorWithTrace;
 		error.importTrace = ['/a.js', '/b.js', '/c.js'];
