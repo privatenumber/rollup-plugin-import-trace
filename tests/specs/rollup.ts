@@ -223,10 +223,7 @@ export default testSuite('Rollup', ({ describe }) => {
 		test('traces errors when sibling import delays moduleParsed', async () => {
 			await using fixture = await createFixture({
 				'index.js': 'export { a } from "./a.js"',
-				'a.js': [
-					'export { value } from "./broken.js"',
-					'import "./slow.js"',
-				].join('\n'),
+				'a.js': `export { value } from "./broken.js"\nimport "./slow.js"`,
 				'slow.js': 'export const slow = 1',
 				'broken.js': 'invalid syntax {{{',
 			});
