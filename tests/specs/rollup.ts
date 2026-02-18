@@ -187,6 +187,81 @@ export default testSuite('Rollup', ({ describe }) => {
 		});
 	});
 
+	describe('Error message patching', ({ test }) => {
+		test('embeds formatted trace in error message', async () => {
+			await using fixture = await createFixture({
+				'index.js': 'export { value } from "./a.js"',
+				'a.js': 'export { value } from "./broken.js"',
+				'broken.js': 'this is not valid javascript {{{',
+			});
+
+			let caughtError: RollupErrorWithTrace | undefined;
+			try {
+				await rollup({
+					input: fixture.getPath('index.js'),
+					plugins: [importTrace()],
+				});
+			} catch (error) {
+				caughtError = error as RollupErrorWithTrace;
+			}
+
+			expect(caughtError).toBeDefined();
+			expect(caughtError!.message).toContain('Import trace:');
+			expect(caughtError!.message).toContain('index.js');
+			expect(caughtError!.message).toContain('broken.js');
+		});
+	});
+
+	describe('moduleParsed fallback', ({ test }) => {
+		/**
+		 * When a module has a slow-resolving sibling import, moduleParsed
+		 * for the parent is delayed (it waits for ALL imports to resolve).
+		 * Meanwhile, a fast-resolving import can fail during parse, terminating
+		 * the build before moduleParsed fires. The plugin falls back to
+		 * getModuleInfo() in buildEnd to recover the import relationship.
+		 */
+		test('traces errors when sibling import delays moduleParsed', async () => {
+			await using fixture = await createFixture({
+				'index.js': 'export { a } from "./a.js"',
+				'a.js': [
+					'export { value } from "./broken.js"',
+					'import "./slow.js"',
+				].join('\n'),
+				'slow.js': 'export const slow = 1',
+				'broken.js': 'invalid syntax {{{',
+			});
+
+			let caughtError: RollupErrorWithTrace | undefined;
+			try {
+				await rollup({
+					input: fixture.getPath('index.js'),
+					plugins: [
+						{
+							name: 'slow-resolve',
+							async resolveId(source) {
+								if (source.includes('slow')) {
+									await new Promise(resolve => setTimeout(resolve, 500));
+								}
+								return null;
+							},
+						},
+						importTrace(),
+					],
+				});
+			} catch (error) {
+				caughtError = error as RollupErrorWithTrace;
+			}
+
+			expect(caughtError).toBeDefined();
+			expect(caughtError!.importTrace).toBeDefined();
+			// Full chain: index → a → broken
+			expect(caughtError!.importTrace).toHaveLength(3);
+			expect(caughtError!.importTrace![0]).toContain('index.js');
+			expect(caughtError!.importTrace![1]).toContain('a.js');
+			expect(caughtError!.importTrace![2]).toContain('broken.js');
+		});
+	});
+
 	describe('Plugin reusability', ({ test }) => {
 		test('plugin instance can be reused across builds', async () => {
 			const plugin = importTrace();

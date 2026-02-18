@@ -182,11 +182,31 @@ export const importTrace = (): RollupVitePlugin => {
 				return;
 			}
 
+			// Supplement importerMap with Rollup's module info for modules
+			// whose moduleParsed never fired (happens when a dependency fails
+			// during transform — the entire ancestor chain misses moduleParsed)
+			for (const id of this.getModuleIds()) {
+				const info = this.getModuleInfo(id);
+				if (info) {
+					for (const importedId of info.importedIds) {
+						if (!importerMap.has(importedId)) {
+							importerMap.set(importedId, id);
+						}
+					}
+					for (const importedId of info.dynamicallyImportedIds) {
+						if (!importerMap.has(importedId)) {
+							importerMap.set(importedId, id);
+						}
+					}
+				}
+			}
+
 			const moduleId = getErrorFile(error);
 			if (moduleId) {
 				const trace = getTrace(moduleId);
 				if (trace.length > 1) {
 					(error as RollupErrorWithTrace).importTrace = trace;
+					patchErrorWithTrace(error);
 				}
 			}
 		},
