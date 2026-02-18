@@ -262,6 +262,55 @@ export default testSuite('Rollup', ({ describe }) => {
 		});
 	});
 
+	describe('Output phase errors', ({ test }) => {
+		/**
+		 * Some errors (e.g. MISSING_EXPORT) fire during output generation
+		 * (chunk.generateExports), not during the build phase. buildEnd
+		 * never sees these. The renderError hook handles them.
+		 *
+		 * The error may only have `exporter` (not `id` or `loc.file`),
+		 * so getErrorFile must check that property too.
+		 */
+		test('traces errors during output generation via renderError', async () => {
+			await using fixture = await createFixture({
+				'index.js': 'export { value } from "./a.js"',
+				'a.js': 'export { value } from "./b.js"',
+				'b.js': 'export const value = 1',
+			});
+
+			let caughtError: RollupErrorWithTrace | undefined;
+			try {
+				const build = await rollup({
+					input: fixture.getPath('index.js'),
+					plugins: [
+						importTrace(),
+						{
+							name: 'test-output-error',
+							renderChunk() {
+								this.error({
+									message: `Exported variable "x" is not defined in "${fixture.getPath('b.js')}".`,
+									exporter: fixture.getPath('b.js'),
+								} as Parameters<typeof this.error>[0]);
+							},
+						},
+					],
+				});
+
+				await build.generate({ format: 'es' });
+			} catch (error) {
+				caughtError = error as RollupErrorWithTrace;
+			}
+
+			expect(caughtError).toBeDefined();
+			expect(caughtError!.importTrace).toBeDefined();
+			expect(caughtError!.importTrace).toHaveLength(3);
+			expect(caughtError!.importTrace![0]).toContain('index.js');
+			expect(caughtError!.importTrace![1]).toContain('a.js');
+			expect(caughtError!.importTrace![2]).toContain('b.js');
+			expect(caughtError!.message).toContain('Import trace:');
+		});
+	});
+
 	describe('Plugin reusability', ({ test }) => {
 		test('plugin instance can be reused across builds', async () => {
 			const plugin = importTrace();

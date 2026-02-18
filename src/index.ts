@@ -63,6 +63,7 @@ export const patchErrorWithTrace = (error: unknown): void => {
 		&& typeof error.message === 'string'
 		&& 'importTrace' in error
 		&& Array.isArray(error.importTrace)
+		&& !error.message.includes('\n\nImport trace:\n')
 	) {
 		error.message += formatTrace(error.importTrace);
 	}
@@ -100,7 +101,7 @@ export const importTrace = (): RollupVitePlugin => {
 
 	const getErrorFile = (
 		error: RollupError,
-	) => (error.id ?? error.loc?.file);
+	) => (error.id ?? error.loc?.file ?? (error as { exporter?: string }).exporter);
 
 	// Build trace by walking importer map
 	const getTrace = (moduleId: string): string[] => {
@@ -202,6 +203,24 @@ export const importTrace = (): RollupVitePlugin => {
 			}
 
 			const moduleId = getErrorFile(error);
+			if (moduleId) {
+				const trace = getTrace(moduleId);
+				if (trace.length > 1) {
+					(error as RollupErrorWithTrace).importTrace = trace;
+					patchErrorWithTrace(error);
+				}
+			}
+		},
+
+		// Handle errors during output generation (renderChunk, generateBundle)
+		// buildEnd only receives build-phase errors; output-phase errors
+		// (e.g. MISSING_EXPORT from chunk.generateExports) need renderError
+		renderError(error) {
+			if (!error) {
+				return;
+			}
+
+			const moduleId = getErrorFile(error as RollupError);
 			if (moduleId) {
 				const trace = getTrace(moduleId);
 				if (trace.length > 1) {
