@@ -1,6 +1,7 @@
 import { testSuite, expect } from 'manten';
 import { rollup } from 'rollup';
 import { createFixture } from 'fs-fixture';
+import { setTimeout } from 'node:timers/promises';
 import nodeResolve from '@rollup/plugin-node-resolve';
 import { importTrace, type RollupErrorWithTrace } from '../../src/index.js';
 
@@ -237,7 +238,7 @@ export default testSuite('Rollup', ({ describe }) => {
 							name: 'slow-resolve',
 							async resolveId(source) {
 								if (source.includes('slow')) {
-									await new Promise(resolve => setTimeout(resolve, 500));
+									await setTimeout(500);
 								}
 								return null;
 							},
