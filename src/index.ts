@@ -100,6 +100,10 @@ export const importTrace = (): RollupVitePlugin => {
 	// Shadow graph: moduleId -> importerId (first importer wins)
 	const importerMap = new Map<string, string>();
 
+	// Track resolveId calls to recover relationships that Rollup
+	// hasn't recorded when resolution fails mid-chain
+	const resolveRecords: Array<[source: string, importer: string]> = [];
+
 	const recordImports = (
 		importerId: string,
 		importedIds: readonly string[],
@@ -147,6 +151,47 @@ export const importTrace = (): RollupVitePlugin => {
 		}
 	};
 
+	// Extract subpath from an import specifier for fuzzy matching.
+	// Relative: ./protos/a/b.ts → protos/a/b.ts
+	// Scoped bare: @scope/pkg/a/b.ts → a/b.ts
+	// Bare: pkg/a/b.ts → a/b.ts
+	const getSubpath = (source: string): string | undefined => {
+		if (source.startsWith('.')) {
+			return source.replace(/^\.\//, '');
+		}
+		if (source.startsWith('@')) {
+			const secondSlash = source.indexOf('/', source.indexOf('/') + 1);
+			return secondSlash === -1 ? undefined : source.slice(secondSlash + 1);
+		}
+		const firstSlash = source.indexOf('/');
+		return firstSlash === -1 ? undefined : source.slice(firstSlash + 1);
+	};
+
+	// Replay recorded resolveId calls to recover import relationships
+	// that Rollup drops when resolution fails mid-chain
+	const replayResolveRecords = async (
+		moduleId: string,
+		resolve: (
+			source: string,
+			importer: string,
+			options: { skipSelf: boolean },
+		) => Promise<{ id: string } | null>,
+	) => {
+		for (const [source, importer] of resolveRecords) {
+			try {
+				const resolved = await resolve(source, importer, { skipSelf: true });
+				if (resolved && !importerMap.has(resolved.id)) {
+					importerMap.set(resolved.id, importer);
+				}
+			} catch {
+				const subpath = getSubpath(source);
+				if (subpath && moduleId.includes(subpath)) {
+					importerMap.set(moduleId, importer);
+				}
+			}
+		}
+	};
+
 	// Build trace using Vite's moduleGraph
 	const getViteTrace = (
 		module_: ViteModule | undefined,
@@ -190,6 +235,16 @@ export const importTrace = (): RollupVitePlugin => {
 		// Clear state between builds (critical for watch mode)
 		buildStart: () => {
 			importerMap.clear();
+			resolveRecords.length = 0;
+		},
+
+		// Capture every resolution attempt so we can recover
+		// relationships that Rollup drops when resolveId fails mid-chain
+		resolveId(source, importer) {
+			if (importer) {
+				resolveRecords.push([source, importer]);
+			}
+			return null;
 		},
 
 		// Track imports (only fires in build mode, not Vite dev)
@@ -197,7 +252,7 @@ export const importTrace = (): RollupVitePlugin => {
 			recordImports(moduleInfo.id, moduleInfo.importedIds, moduleInfo.dynamicallyImportedIds);
 		},
 
-		buildEnd(error) {
+		async buildEnd(error) {
 			if (!error) {
 				return;
 			}
@@ -220,6 +275,13 @@ export const importTrace = (): RollupVitePlugin => {
 						recordImports(id, info.importedIds, info.dynamicallyImportedIds);
 					}
 				}
+				trace = getTrace(moduleId);
+			}
+
+			if (trace.length <= 1) {
+				// Last resort: replay resolveId records to recover relationships
+				// dropped when resolution fails mid-chain
+				await replayResolveRecords(moduleId, this.resolve.bind(this));
 				trace = getTrace(moduleId);
 			}
 
