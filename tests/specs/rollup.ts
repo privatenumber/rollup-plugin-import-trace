@@ -186,9 +186,7 @@ export default testSuite('Rollup', ({ describe }) => {
 			expect(caughtError!.importTrace![2]).toContain('Button.js');
 			expect(caughtError!.importTrace![3]).toContain('Button.css');
 		});
-	});
 
-	describe('Error message patching', ({ test }) => {
 		test('embeds formatted trace in error message', async () => {
 			await using fixture = await createFixture({
 				'index.js': 'export { value } from "./a.js"',
@@ -211,9 +209,7 @@ export default testSuite('Rollup', ({ describe }) => {
 			expect(caughtError!.message).toContain('index.js');
 			expect(caughtError!.message).toContain('broken.js');
 		});
-	});
 
-	describe('moduleParsed fallback', ({ test }) => {
 		/**
 		 * When a module has a slow-resolving sibling import, moduleParsed
 		 * for the parent is delayed (it waits for ALL imports to resolve).
@@ -258,9 +254,7 @@ export default testSuite('Rollup', ({ describe }) => {
 			expect(caughtError!.importTrace![1]).toContain('a.js');
 			expect(caughtError!.importTrace![2]).toContain('broken.js');
 		});
-	});
 
-	describe('Output phase errors', ({ test }) => {
 		/**
 		 * Some errors (e.g. MISSING_EXPORT) fire during output generation
 		 * (chunk.generateExports), not during the build phase. buildEnd
