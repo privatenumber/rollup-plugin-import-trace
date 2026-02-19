@@ -38,7 +38,7 @@ import { importTrace } from 'rollup-plugin-import-trace'
 
 export default {
     plugins: [
-        importTrace(),
+        importTrace()
         // other plugins...
     ]
 }
