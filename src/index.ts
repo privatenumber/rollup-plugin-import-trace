@@ -77,9 +77,11 @@ export const patchErrorWithTrace = (error: unknown): void => {
 	}
 };
 
+// Rollup normalizes module IDs to forward slashes, but error.path
+// (Node.js ErrnoException) may use OS-native backslashes on Windows
 const getErrorFile = (
 	error: RollupError & { path?: string },
-) => (error.id ?? error.loc?.file ?? error.exporter ?? error.path);
+) => (error.id ?? error.loc?.file ?? error.exporter ?? error.path)?.replaceAll('\\', '/');
 
 // Build importer map on-demand from Rollup's module graph.
 // importedIds is populated after resolveId completes for each import,
