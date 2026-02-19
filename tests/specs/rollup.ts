@@ -285,6 +285,60 @@ export default testSuite('Rollup', ({ describe }) => {
 		});
 
 		/**
+		 * When a plugin's resolveId hook throws (e.g. commonjs--resolver
+		 * hitting ENOENT while probing a file), Rollup never records the
+		 * import relationship — importedIds/importers stay empty.
+		 *
+		 * The plugin recovers by replaying captured resolveId calls in
+		 * buildEnd. When re-resolution also fails, subpath matching
+		 * connects the error module back to its importer.
+		 *
+		 * importTrace() must be listed before the throwing plugin so its
+		 * resolveId hook captures the (source, importer) record.
+		 */
+		test('traces when resolveId throws for bare specifier', async () => {
+			await using fixture = await createFixture({
+				'index.js': 'export { value } from "./a.js"',
+				'a.js': 'export { value } from "@scope/pkg/deep/module.js"',
+			});
+
+			const failingPath = fixture.getPath(
+				'node_modules/@scope/pkg/deep/module.js',
+			);
+
+			let caughtError: RollupErrorWithTrace | undefined;
+			try {
+				await rollup({
+					input: fixture.getPath('index.js'),
+					plugins: [
+						importTrace(),
+						{
+							name: 'throwing-resolver',
+							resolveId(source) {
+								if (source === '@scope/pkg/deep/module.js') {
+									throw Object.assign(
+										new Error(`ENOENT: open '${failingPath}'`),
+										{ path: failingPath },
+									);
+								}
+								return null;
+							},
+						},
+					],
+				});
+			} catch (error) {
+				caughtError = error as RollupErrorWithTrace;
+			}
+
+			expect(caughtError).toBeDefined();
+			expect(caughtError!.importTrace).toBeDefined();
+			expect(caughtError!.importTrace).toHaveLength(3);
+			expect(caughtError!.importTrace![0]).toContain('index.js');
+			expect(caughtError!.importTrace![1]).toContain('a.js');
+			expect(caughtError!.importTrace![2]).toContain('module.js');
+		});
+
+		/**
 		 * Some errors (e.g. MISSING_EXPORT) fire during output generation
 		 * (chunk.generateExports), not during the build phase. buildEnd
 		 * never sees these. The renderError hook handles them.
