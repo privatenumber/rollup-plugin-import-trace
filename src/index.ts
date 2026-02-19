@@ -77,11 +77,17 @@ export const patchErrorWithTrace = (error: unknown): void => {
 	}
 };
 
-// Rollup normalizes module IDs to forward slashes, but error.path
-// (Node.js ErrnoException) may use OS-native backslashes on Windows
+// Rollup uses OS-native path separators for module IDs on Windows,
+// and error properties (id, loc.file, path) also use backslashes.
+// Normalize to forward slashes for consistent map lookups and output.
+const normalizePath = (filePath: string) => filePath.replaceAll('\\', '/');
+
 const getErrorFile = (
 	error: RollupError & { path?: string },
-) => (error.id ?? error.loc?.file ?? error.exporter ?? error.path)?.replaceAll('\\', '/');
+) => {
+	const raw = error.id ?? error.loc?.file ?? error.exporter ?? error.path;
+	return raw ? normalizePath(raw) : undefined;
+};
 
 // Build importer map on-demand from Rollup's module graph.
 // importedIds is populated after resolveId completes for each import,
@@ -91,26 +97,24 @@ const buildImporterMap = (
 	getModuleInfo: GetModuleInfo,
 ) => {
 	const importerMap = new Map<string, string>();
-	let moduleCount = 0;
 	for (const id of getModuleIds()) {
-		moduleCount += 1;
 		const info = getModuleInfo(id);
-		// DEBUG: log each module's info
-		console.log(`[DEBUG buildImporterMap] id="${id}" hasInfo=${!!info} importedIds=${JSON.stringify(info?.importedIds)} dynamicIds=${JSON.stringify(info?.dynamicallyImportedIds)}`);
 		if (info) {
+			const normalizedId = normalizePath(id);
 			for (const importedId of info.importedIds) {
-				if (!importerMap.has(importedId)) {
-					importerMap.set(importedId, id);
+				const normalizedImportedId = normalizePath(importedId);
+				if (!importerMap.has(normalizedImportedId)) {
+					importerMap.set(normalizedImportedId, normalizedId);
 				}
 			}
 			for (const importedId of info.dynamicallyImportedIds) {
-				if (!importerMap.has(importedId)) {
-					importerMap.set(importedId, id);
+				const normalizedImportedId = normalizePath(importedId);
+				if (!importerMap.has(normalizedImportedId)) {
+					importerMap.set(normalizedImportedId, normalizedId);
 				}
 			}
 		}
 	}
-	console.log(`[DEBUG buildImporterMap] moduleCount=${moduleCount} mapSize=${importerMap.size}`);
 	return importerMap;
 };
 
@@ -166,17 +170,21 @@ const replayResolveRecords = async (
 	) => Promise<{ id: string } | null>,
 ) => {
 	for (const [source, importer] of resolveRecords) {
+		const normalizedImporter = normalizePath(importer);
 		try {
 			const resolved = await resolve(source, importer, { skipSelf: true });
-			if (resolved && !importerMap.has(resolved.id)) {
-				importerMap.set(resolved.id, importer);
+			if (resolved) {
+				const normalizedId = normalizePath(resolved.id);
+				if (!importerMap.has(normalizedId)) {
+					importerMap.set(normalizedId, normalizedImporter);
+				}
 			}
 		} catch {
 			// Slash-prefixed includes() respects path boundaries while still
 			// tolerating extension mismatches (e.g. "deep/types" vs "deep/types.d.ts")
 			const subpath = getSubpath(source);
 			if (subpath && moduleId.includes(`/${subpath}`)) {
-				importerMap.set(moduleId, importer);
+				importerMap.set(moduleId, normalizedImporter);
 			}
 		}
 
@@ -278,14 +286,7 @@ export const importTrace = (): RollupVitePlugin => {
 				return;
 			}
 
-			// DEBUG: log error properties
-			console.log('[DEBUG buildEnd] error.id:', (error as any).id);
-			console.log('[DEBUG buildEnd] error.loc?.file:', (error as any).loc?.file);
-			console.log('[DEBUG buildEnd] error.exporter:', (error as any).exporter);
-			console.log('[DEBUG buildEnd] error.path:', (error as any).path);
-
 			const moduleId = getErrorFile(error);
-			console.log('[DEBUG buildEnd] moduleId:', moduleId);
 			if (!moduleId) {
 				return;
 			}
@@ -295,14 +296,7 @@ export const importTrace = (): RollupVitePlugin => {
 				id => this.getModuleInfo(id),
 			);
 
-			// DEBUG: log importer map
-			console.log('[DEBUG buildEnd] importerMap entries:');
-			for (const [key, value] of importerMap) {
-				console.log(`  "${key}" → "${value}"`);
-			}
-
 			let trace = getTrace(moduleId, importerMap);
-			console.log('[DEBUG buildEnd] trace:', trace);
 
 			if (trace.length <= 1) {
 				// Graph walk failed — the error module has no recorded importer.
@@ -335,12 +329,7 @@ export const importTrace = (): RollupVitePlugin => {
 				return;
 			}
 
-			// DEBUG: log error properties
-			console.log('[DEBUG renderError] error.id:', (error as any).id);
-			console.log('[DEBUG renderError] error.exporter:', (error as any).exporter);
-
 			const moduleId = getErrorFile(error as RollupError & { path?: string });
-			console.log('[DEBUG renderError] moduleId:', moduleId);
 			if (!moduleId) {
 				return;
 			}
@@ -350,14 +339,7 @@ export const importTrace = (): RollupVitePlugin => {
 				id => this.getModuleInfo(id),
 			);
 
-			// DEBUG: log importer map
-			console.log('[DEBUG renderError] importerMap entries:');
-			for (const [key, value] of importerMap) {
-				console.log(`  "${key}" → "${value}"`);
-			}
-
 			const trace = getTrace(moduleId, importerMap);
-			console.log('[DEBUG renderError] trace:', trace);
 			if (trace.length > 1) {
 				(error as RollupErrorWithTrace).importTrace = trace;
 				patchErrorWithTrace(error);
