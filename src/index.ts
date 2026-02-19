@@ -189,6 +189,11 @@ export const importTrace = (): RollupVitePlugin => {
 					importerMap.set(moduleId, importer);
 				}
 			}
+
+			// Stop once the error module has a known importer
+			if (importerMap.has(moduleId)) {
+				break;
+			}
 		}
 	};
 
