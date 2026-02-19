@@ -37,9 +37,15 @@ npm install rollup-plugin-import-trace
 import { importTrace } from 'rollup-plugin-import-trace'
 
 export default {
-    plugins: [importTrace()]
+    plugins: [
+        importTrace()
+        // other plugins...
+    ]
 }
 ```
+
+> [!IMPORTANT]
+> List `importTrace()` **first** in the plugins array. Its `resolveId` hook needs to run before other plugins to record import relationships for error recovery.
 
 Works with Rollup and Vite (both dev and build modes).
 

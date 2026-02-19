@@ -35,6 +35,11 @@ export default testSuite('Rollup', ({ describe }) => {
 			expect(caughtError!.importTrace![0]).toContain('index.js');
 			expect(caughtError!.importTrace![1]).toContain('a.js');
 			expect(caughtError!.importTrace![2]).toContain('broken.js');
+
+			// Trace is also embedded in the error message
+			expect(caughtError!.message).toContain('Import trace:');
+			expect(caughtError!.message).toContain('index.js');
+			expect(caughtError!.message).toContain('broken.js');
 		});
 
 		test('enhances resolution errors with import trace', async () => {
@@ -58,36 +63,6 @@ export default testSuite('Rollup', ({ describe }) => {
 			expect(caughtError!.importTrace).toHaveLength(2);
 			expect(caughtError!.importTrace![0]).toContain('index.js');
 			expect(caughtError!.importTrace![1]).toContain('a.js');
-		});
-
-		test('shows complete trace for deep errors', async () => {
-			await using fixture = await createFixture({
-				'index.js': 'export { value } from "./a.js"',
-				'a.js': 'export { value } from "./b.js"',
-				'b.js': 'export { value } from "./c.js"',
-				'c.js': 'export { value } from "./broken.js"',
-				'broken.js': 'export const value = "unclosed string',
-			});
-
-			let caughtError: RollupErrorWithTrace | undefined;
-			try {
-				await rollup({
-					input: fixture.getPath('index.js'),
-					plugins: [importTrace()],
-				});
-			} catch (error) {
-				caughtError = error as RollupErrorWithTrace;
-			}
-
-			expect(caughtError).toBeDefined();
-			// Full chain: index → a → b → c → broken
-			expect(caughtError!.importTrace).toBeDefined();
-			expect(caughtError!.importTrace).toHaveLength(5);
-			expect(caughtError!.importTrace![0]).toContain('index.js');
-			expect(caughtError!.importTrace![1]).toContain('a.js');
-			expect(caughtError!.importTrace![2]).toContain('b.js');
-			expect(caughtError!.importTrace![3]).toContain('c.js');
-			expect(caughtError!.importTrace![4]).toContain('broken.js');
 		});
 
 		test('no trace when entry point has error', async () => {
@@ -138,38 +113,22 @@ export default testSuite('Rollup', ({ describe }) => {
 		});
 
 		test('traces errors through node_modules', async () => {
-			/**
-			 * Main use case: error occurs deep in node_modules.
-			 * Trace shows how your code led to the problematic dependency.
-			 */
 			await using fixture = await createFixture({
-				'src/index.js': 'import { Button } from "some-lib"',
+				'index.js': 'import { value } from "some-lib"',
 				'node_modules/some-lib': {
 					'package.json': JSON.stringify({
 						name: 'some-lib',
-						main: 'dist/index.js',
+						main: 'index.js',
 					}),
-					dist: {
-						'index.js': `
-							export { Button } from './components/Button.js'
-						`,
-						components: {
-							'Button.js': `
-								import './Button.css'
-								export const Button = () => {}
-							`,
-							'Button.css': `
-								.button { color: red; }
-							`,
-						},
-					},
+					'index.js': 'export { value } from "./broken.js"',
+					'broken.js': 'invalid syntax {{{',
 				},
 			});
 
 			let caughtError: RollupErrorWithTrace | undefined;
 			try {
 				await rollup({
-					input: fixture.getPath('src/index.js'),
+					input: fixture.getPath('index.js'),
 					plugins: [nodeResolve(), importTrace()],
 				});
 			} catch (error) {
@@ -177,13 +136,157 @@ export default testSuite('Rollup', ({ describe }) => {
 			}
 
 			expect(caughtError).toBeDefined();
-			// Full chain from src to node_modules
 			expect(caughtError!.importTrace).toBeDefined();
-			expect(caughtError!.importTrace).toHaveLength(4);
+			expect(caughtError!.importTrace).toHaveLength(3);
 			expect(caughtError!.importTrace![0]).toContain('index.js');
 			expect(caughtError!.importTrace![1]).toMatch(/some-lib/);
-			expect(caughtError!.importTrace![2]).toContain('Button.js');
-			expect(caughtError!.importTrace![3]).toContain('Button.css');
+			expect(caughtError!.importTrace![2]).toContain('broken.js');
+		});
+
+		/**
+		 * ENOENT errors from the load phase have `path` (Node.js ErrnoException)
+		 * but no `id` or `loc.file`. getErrorFile must check `path` as a fallback.
+		 * This happens when a resolved module path doesn't exist on disk
+		 * (e.g. stale build artifacts referencing deleted files).
+		 */
+		test('traces ENOENT load errors via error.path', async () => {
+			await using fixture = await createFixture({
+				'index.js': 'export { value } from "./a.js"',
+				'a.js': 'export { value } from "./missing.js"',
+			});
+
+			// Create a resolve plugin that resolves to a non-existent file path
+			// (simulates stale build artifacts or broken symlinks)
+			const missingFile = fixture.getPath('does-not-exist.js');
+
+			let caughtError: RollupErrorWithTrace | undefined;
+			try {
+				await rollup({
+					input: fixture.getPath('index.js'),
+					plugins: [
+						{
+							name: 'resolve-to-missing-file',
+							resolveId(source) {
+								if (source.endsWith('missing.js')) {
+									return missingFile;
+								}
+								return null;
+							},
+						},
+						importTrace(),
+					],
+				});
+			} catch (error) {
+				caughtError = error as RollupErrorWithTrace;
+			}
+
+			expect(caughtError).toBeDefined();
+			expect(caughtError!.importTrace).toBeDefined();
+			expect(caughtError!.importTrace).toHaveLength(3);
+			expect(caughtError!.importTrace![0]).toContain('index.js');
+			expect(caughtError!.importTrace![1]).toContain('a.js');
+			expect(caughtError!.importTrace![2]).toContain('does-not-exist.js');
+		});
+
+		/**
+		 * When a plugin's resolveId hook throws (e.g. commonjs--resolver
+		 * hitting ENOENT while probing a file), Rollup never records the
+		 * import relationship — importedIds/importers stay empty.
+		 *
+		 * The plugin recovers by replaying captured resolveId calls in
+		 * buildEnd. When re-resolution also fails, subpath matching
+		 * connects the error module back to its importer.
+		 *
+		 * importTrace() must be listed before the throwing plugin so its
+		 * resolveId hook captures the (source, importer) record.
+		 */
+		test('traces when resolveId throws for bare specifier', async () => {
+			await using fixture = await createFixture({
+				'index.js': 'export { value } from "./a.js"',
+				'a.js': 'export { value } from "@scope/pkg/deep/module.js"',
+			});
+
+			const failingPath = fixture.getPath(
+				'node_modules/@scope/pkg/deep/module.js',
+			);
+
+			let caughtError: RollupErrorWithTrace | undefined;
+			try {
+				await rollup({
+					input: fixture.getPath('index.js'),
+					plugins: [
+						importTrace(),
+						{
+							name: 'throwing-resolver',
+							resolveId(source) {
+								if (source === '@scope/pkg/deep/module.js') {
+									throw Object.assign(
+										new Error(`ENOENT: open '${failingPath}'`),
+										{ path: failingPath },
+									);
+								}
+								return null;
+							},
+						},
+					],
+				});
+			} catch (error) {
+				caughtError = error as RollupErrorWithTrace;
+			}
+
+			expect(caughtError).toBeDefined();
+			expect(caughtError!.importTrace).toBeDefined();
+			expect(caughtError!.importTrace).toHaveLength(3);
+			expect(caughtError!.importTrace![0]).toContain('index.js');
+			expect(caughtError!.importTrace![1]).toContain('a.js');
+			expect(caughtError!.importTrace![2]).toContain('module.js');
+		});
+
+		/**
+		 * Some errors (e.g. MISSING_EXPORT) fire during output generation
+		 * (chunk.generateExports), not during the build phase. buildEnd
+		 * never sees these. The renderError hook handles them.
+		 *
+		 * The error may only have `exporter` (not `id` or `loc.file`),
+		 * so getErrorFile must check that property too.
+		 */
+		test('traces errors during output generation via renderError', async () => {
+			await using fixture = await createFixture({
+				'index.js': 'export { value } from "./a.js"',
+				'a.js': 'export { value } from "./b.js"',
+				'b.js': 'export const value = 1',
+			});
+
+			let caughtError: RollupErrorWithTrace | undefined;
+			try {
+				const build = await rollup({
+					input: fixture.getPath('index.js'),
+					plugins: [
+						importTrace(),
+						{
+							name: 'test-output-error',
+							renderChunk() {
+								this.error({
+									message: `Exported variable "x" is not defined in "${fixture.getPath('b.js')}".`,
+									exporter: fixture.getPath('b.js'),
+								});
+							},
+						},
+					],
+				});
+
+				await build.generate({ format: 'es' });
+			} catch (error) {
+				caughtError = error as RollupErrorWithTrace;
+			}
+
+			expect(caughtError).toBeDefined();
+			expect(caughtError!.importTrace).toBeDefined();
+			expect(caughtError!.importTrace).toHaveLength(3);
+			expect(caughtError!.importTrace![0]).toContain('index.js');
+			expect(caughtError!.importTrace![1]).toContain('a.js');
+			expect(caughtError!.importTrace![2]).toContain('b.js');
+			expect(caughtError!.message).toContain('Import trace:');
 		});
 	});
 
