@@ -205,7 +205,8 @@ const replayResolveRecords = async (
 export const importTrace = (): RollupVitePlugin => {
 	// Track resolveId calls to recover relationships that Rollup
 	// hasn't recorded when resolution fails mid-chain.
-	// Replayed sequentially in buildEnd (only on error) with early exit
+	// Replayed sequentially in buildEnd (only on error) with early exit.
+	// Lightweight: two string references per import, cleared each build
 	const resolveRecords: Array<[source: string, importer: string]> = [];
 
 	// Build trace using Vite's moduleGraph
@@ -296,9 +297,10 @@ export const importTrace = (): RollupVitePlugin => {
 			}
 		},
 
-		// Handle errors during output generation (renderChunk, generateBundle)
+		// Handle errors during output generation (renderChunk, generateBundle).
 		// buildEnd only receives build-phase errors; output-phase errors
-		// (e.g. MISSING_EXPORT from chunk.generateExports) need renderError
+		// (e.g. MISSING_EXPORT from chunk.generateExports) need renderError.
+		// No replay needed — module graph is fully built by the output phase
 		renderError(error) {
 			if (!error) {
 				return;
