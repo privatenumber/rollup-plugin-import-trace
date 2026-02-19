@@ -132,7 +132,9 @@ const getTrace = (
 // Bare: pkg/a/b.ts → a/b.ts
 const getSubpath = (source: string): string | undefined => {
 	if (source.startsWith('.')) {
-		return source.replace(/^\.\//, '');
+		// Only ./relative paths produce usable subpaths.
+		// ../traversals can't match absolute moduleId paths.
+		return source.startsWith('./') ? source.slice(2) : undefined;
 	}
 	if (source.startsWith('@')) {
 		const secondSlash = source.indexOf('/', source.indexOf('/') + 1);
@@ -163,10 +165,10 @@ const replayResolveRecords = async (
 				importerMap.set(resolved.id, importer);
 			}
 		} catch {
-			// Uses includes() not endsWith() because the specifier extension
-			// may differ from the resolved path (e.g. .ts vs .ts.js)
+			// Slash-prefixed includes() respects path boundaries while still
+			// tolerating extension mismatches (e.g. "deep/types" vs "deep/types.d.ts")
 			const subpath = getSubpath(source);
-			if (subpath && moduleId.includes(subpath)) {
+			if (subpath && moduleId.includes(`/${subpath}`)) {
 				importerMap.set(moduleId, importer);
 			}
 		}
