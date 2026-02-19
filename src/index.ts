@@ -273,7 +273,14 @@ export const importTrace = (): RollupVitePlugin => {
 				return;
 			}
 
+			// DEBUG: log error properties
+			console.log('[DEBUG buildEnd] error.id:', (error as any).id);
+			console.log('[DEBUG buildEnd] error.loc?.file:', (error as any).loc?.file);
+			console.log('[DEBUG buildEnd] error.exporter:', (error as any).exporter);
+			console.log('[DEBUG buildEnd] error.path:', (error as any).path);
+
 			const moduleId = getErrorFile(error);
+			console.log('[DEBUG buildEnd] moduleId:', moduleId);
 			if (!moduleId) {
 				return;
 			}
@@ -283,7 +290,14 @@ export const importTrace = (): RollupVitePlugin => {
 				id => this.getModuleInfo(id),
 			);
 
+			// DEBUG: log importer map
+			console.log('[DEBUG buildEnd] importerMap entries:');
+			for (const [key, value] of importerMap) {
+				console.log(`  "${key}" → "${value}"`);
+			}
+
 			let trace = getTrace(moduleId, importerMap);
+			console.log('[DEBUG buildEnd] trace:', trace);
 
 			if (trace.length <= 1) {
 				// Graph walk failed — the error module has no recorded importer.
@@ -316,7 +330,12 @@ export const importTrace = (): RollupVitePlugin => {
 				return;
 			}
 
+			// DEBUG: log error properties
+			console.log('[DEBUG renderError] error.id:', (error as any).id);
+			console.log('[DEBUG renderError] error.exporter:', (error as any).exporter);
+
 			const moduleId = getErrorFile(error as RollupError & { path?: string });
+			console.log('[DEBUG renderError] moduleId:', moduleId);
 			if (!moduleId) {
 				return;
 			}
@@ -326,7 +345,14 @@ export const importTrace = (): RollupVitePlugin => {
 				id => this.getModuleInfo(id),
 			);
 
+			// DEBUG: log importer map
+			console.log('[DEBUG renderError] importerMap entries:');
+			for (const [key, value] of importerMap) {
+				console.log(`  "${key}" → "${value}"`);
+			}
+
 			const trace = getTrace(moduleId, importerMap);
+			console.log('[DEBUG renderError] trace:', trace);
 			if (trace.length > 1) {
 				(error as RollupErrorWithTrace).importTrace = trace;
 				patchErrorWithTrace(error);
