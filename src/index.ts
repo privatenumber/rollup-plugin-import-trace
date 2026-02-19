@@ -143,7 +143,9 @@ const getSubpath = (source: string): string | undefined => {
 };
 
 // Replay recorded resolveId calls to recover import relationships
-// that Rollup drops when resolution fails mid-chain
+// that Rollup drops when a plugin's resolveId hook THROWS (not returns null).
+// Null returns mean "not my concern" — Rollup continues to the next plugin.
+// Throws abort resolution entirely, leaving importedIds/importers empty.
 const replayResolveRecords = async (
 	moduleId: string,
 	importerMap: Map<string, string>,
@@ -280,8 +282,12 @@ export const importTrace = (): RollupVitePlugin => {
 			let trace = getTrace(moduleId, importerMap);
 
 			if (trace.length <= 1) {
-				// Last resort: replay resolveId records to recover relationships
-				// dropped when resolution fails mid-chain
+				// Graph walk failed — the error module has no recorded importer.
+				// This only happens when a plugin's resolveId threw (e.g.
+				// commonjs-resolver hitting ENOENT), which prevents Rollup
+				// from recording the import edge. Standard "not found" errors
+				// don't reach here: they either resolve normally or produce
+				// UNRESOLVED_IMPORT warnings (not build errors).
 				await replayResolveRecords(
 					moduleId,
 					importerMap,
