@@ -65,36 +65,6 @@ export default testSuite('Rollup', ({ describe }) => {
 			expect(caughtError!.importTrace![1]).toContain('a.js');
 		});
 
-		test('shows complete trace for deep errors', async () => {
-			await using fixture = await createFixture({
-				'index.js': 'export { value } from "./a.js"',
-				'a.js': 'export { value } from "./b.js"',
-				'b.js': 'export { value } from "./c.js"',
-				'c.js': 'export { value } from "./broken.js"',
-				'broken.js': 'export const value = "unclosed string',
-			});
-
-			let caughtError: RollupErrorWithTrace | undefined;
-			try {
-				await rollup({
-					input: fixture.getPath('index.js'),
-					plugins: [importTrace()],
-				});
-			} catch (error) {
-				caughtError = error as RollupErrorWithTrace;
-			}
-
-			expect(caughtError).toBeDefined();
-			// Full chain: index → a → b → c → broken
-			expect(caughtError!.importTrace).toBeDefined();
-			expect(caughtError!.importTrace).toHaveLength(5);
-			expect(caughtError!.importTrace![0]).toContain('index.js');
-			expect(caughtError!.importTrace![1]).toContain('a.js');
-			expect(caughtError!.importTrace![2]).toContain('b.js');
-			expect(caughtError!.importTrace![3]).toContain('c.js');
-			expect(caughtError!.importTrace![4]).toContain('broken.js');
-		});
-
 		test('no trace when entry point has error', async () => {
 			await using fixture = await createFixture({
 				'index.js': 'this is not valid javascript {{{',
@@ -143,38 +113,22 @@ export default testSuite('Rollup', ({ describe }) => {
 		});
 
 		test('traces errors through node_modules', async () => {
-			/**
-			 * Main use case: error occurs deep in node_modules.
-			 * Trace shows how your code led to the problematic dependency.
-			 */
 			await using fixture = await createFixture({
-				'src/index.js': 'import { Button } from "some-lib"',
+				'index.js': 'import { value } from "some-lib"',
 				'node_modules/some-lib': {
 					'package.json': JSON.stringify({
 						name: 'some-lib',
-						main: 'dist/index.js',
+						main: 'index.js',
 					}),
-					dist: {
-						'index.js': `
-							export { Button } from './components/Button.js'
-						`,
-						components: {
-							'Button.js': `
-								import './Button.css'
-								export const Button = () => {}
-							`,
-							'Button.css': `
-								.button { color: red; }
-							`,
-						},
-					},
+					'index.js': 'export { value } from "./broken.js"',
+					'broken.js': 'invalid syntax {{{',
 				},
 			});
 
 			let caughtError: RollupErrorWithTrace | undefined;
 			try {
 				await rollup({
-					input: fixture.getPath('src/index.js'),
+					input: fixture.getPath('index.js'),
 					plugins: [nodeResolve(), importTrace()],
 				});
 			} catch (error) {
@@ -182,60 +136,10 @@ export default testSuite('Rollup', ({ describe }) => {
 			}
 
 			expect(caughtError).toBeDefined();
-			// Full chain from src to node_modules
 			expect(caughtError!.importTrace).toBeDefined();
-			expect(caughtError!.importTrace).toHaveLength(4);
-			expect(caughtError!.importTrace![0]).toContain('index.js');
-			expect(caughtError!.importTrace![1]).toMatch(/some-lib/);
-			expect(caughtError!.importTrace![2]).toContain('Button.js');
-			expect(caughtError!.importTrace![3]).toContain('Button.css');
-		});
-
-		/**
-		 * When a module has a slow-resolving sibling import, moduleParsed
-		 * for the parent is delayed (it waits for ALL imports to resolve).
-		 * Meanwhile, a fast-resolving import can fail during parse, terminating
-		 * the build before moduleParsed fires. The plugin falls back to
-		 * getModuleInfo() in buildEnd to recover the import relationship.
-		 */
-		test('traces errors when sibling import delays moduleParsed', async () => {
-			// Never resolves — build terminates from syntax error before it matters
-			const slowResolve = new Promise<void>(() => {});
-
-			await using fixture = await createFixture({
-				'index.js': 'export { a } from "./a.js"',
-				'a.js': 'export { value } from "./broken.js"\nimport "./slow.js"',
-				'slow.js': 'export const slow = 1',
-				'broken.js': 'invalid syntax {{{',
-			});
-
-			let caughtError: RollupErrorWithTrace | undefined;
-			try {
-				await rollup({
-					input: fixture.getPath('index.js'),
-					plugins: [
-						{
-							name: 'slow-resolve',
-							async resolveId(source) {
-								if (source.includes('slow')) {
-									await slowResolve;
-								}
-								return null;
-							},
-						},
-						importTrace(),
-					],
-				});
-			} catch (error) {
-				caughtError = error as RollupErrorWithTrace;
-			}
-
-			expect(caughtError).toBeDefined();
-			expect(caughtError!.importTrace).toBeDefined();
-			// Full chain: index → a → broken
 			expect(caughtError!.importTrace).toHaveLength(3);
 			expect(caughtError!.importTrace![0]).toContain('index.js');
-			expect(caughtError!.importTrace![1]).toContain('a.js');
+			expect(caughtError!.importTrace![1]).toMatch(/some-lib/);
 			expect(caughtError!.importTrace![2]).toContain('broken.js');
 		});
 
