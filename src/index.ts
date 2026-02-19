@@ -91,8 +91,12 @@ const buildImporterMap = (
 	getModuleInfo: GetModuleInfo,
 ) => {
 	const importerMap = new Map<string, string>();
+	let moduleCount = 0;
 	for (const id of getModuleIds()) {
+		moduleCount += 1;
 		const info = getModuleInfo(id);
+		// DEBUG: log each module's info
+		console.log(`[DEBUG buildImporterMap] id="${id}" hasInfo=${!!info} importedIds=${JSON.stringify(info?.importedIds)} dynamicIds=${JSON.stringify(info?.dynamicallyImportedIds)}`);
 		if (info) {
 			for (const importedId of info.importedIds) {
 				if (!importerMap.has(importedId)) {
@@ -106,6 +110,7 @@ const buildImporterMap = (
 			}
 		}
 	}
+	console.log(`[DEBUG buildImporterMap] moduleCount=${moduleCount} mapSize=${importerMap.size}`);
 	return importerMap;
 };
 
