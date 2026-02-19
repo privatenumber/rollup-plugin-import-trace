@@ -101,7 +101,8 @@ export const importTrace = (): RollupVitePlugin => {
 	const importerMap = new Map<string, string>();
 
 	// Track resolveId calls to recover relationships that Rollup
-	// hasn't recorded when resolution fails mid-chain
+	// hasn't recorded when resolution fails mid-chain.
+	// Replayed sequentially in buildEnd (only on error) with early exit
 	const resolveRecords: Array<[source: string, importer: string]> = [];
 
 	const recordImports = (
@@ -184,6 +185,8 @@ export const importTrace = (): RollupVitePlugin => {
 					importerMap.set(resolved.id, importer);
 				}
 			} catch {
+				// Uses includes() not endsWith() because the specifier extension
+				// may differ from the resolved path (e.g. .ts vs .ts.js)
 				const subpath = getSubpath(source);
 				if (subpath && moduleId.includes(subpath)) {
 					importerMap.set(moduleId, importer);
