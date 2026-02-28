@@ -1,4 +1,6 @@
-import { testSuite, expect } from 'manten';
+import {
+	describe, test, expect, expectSnapshot, onTestFail,
+} from 'manten';
 import { rollup } from 'rollup';
 import { createFixture } from 'fs-fixture';
 import nodeResolve from '@rollup/plugin-node-resolve';
@@ -10,8 +12,8 @@ import { importTrace, type RollupErrorWithTrace } from '../../src/index.js';
  * Tests verify that build errors are automatically enhanced
  * with import traces showing how the problematic module was reached.
  */
-export default testSuite('Rollup', ({ describe }) => {
-	describe('Error enhancement', ({ test }) => {
+describe('Rollup', () => {
+	describe('Error enhancement', () => {
 		test('enhances syntax errors with import trace', async () => {
 			await using fixture = await createFixture({
 				'index.js': 'export { value } from "./a.js"',
@@ -290,7 +292,7 @@ export default testSuite('Rollup', ({ describe }) => {
 		});
 	});
 
-	describe('Plugin reusability', ({ test }) => {
+	describe('Plugin reusability', () => {
 		test('plugin instance can be reused across builds', async () => {
 			const plugin = importTrace();
 

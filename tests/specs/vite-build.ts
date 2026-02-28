@@ -1,4 +1,6 @@
-import { testSuite, expect } from 'manten';
+import {
+	describe, test, expect, expectSnapshot, onTestFail,
+} from 'manten';
 import { createFixture } from 'fs-fixture';
 import { viteBuild } from '../utils/vite.js';
 import { importTrace, type RollupErrorWithTrace } from '../../src/index.js';
@@ -9,7 +11,7 @@ import { importTrace, type RollupErrorWithTrace } from '../../src/index.js';
  * Vite build uses Rollup under the hood, so errors are enhanced
  * the same way as pure Rollup builds.
  */
-export default testSuite('Vite build', ({ test }) => {
+describe('Vite build', () => {
 	test('enhances build errors with import trace', async () => {
 		await using fixture = await createFixture({
 			'index.js': 'export { value } from "./a.js"',

@@ -1,10 +1,12 @@
-import { testSuite, expect } from 'manten';
+import {
+	describe, test, expect, expectSnapshot, onTestFail,
+} from 'manten';
 import { patchErrorWithTrace } from '../../src/index.js';
 
 type ErrorWithTrace = Error & { importTrace?: string[] };
 
-export default testSuite('patchErrorWithTrace', ({ test }) => {
-	test('appends trace to error message', ({ expectSnapshot }) => {
+describe('patchErrorWithTrace', () => {
+	test('appends trace to error message', () => {
 		const error = new Error('Original message') as ErrorWithTrace;
 		error.importTrace = ['/path/to/entry.js', '/path/to/broken.js'];
 
@@ -13,7 +15,7 @@ export default testSuite('patchErrorWithTrace', ({ test }) => {
 		expectSnapshot(error.message);
 	});
 
-	test('works with single entry trace', ({ expectSnapshot }) => {
+	test('works with single entry trace', () => {
 		const error = new Error('Original message') as ErrorWithTrace;
 		error.importTrace = ['/path/to/entry.js'];
 
@@ -58,7 +60,7 @@ export default testSuite('patchErrorWithTrace', ({ test }) => {
 		expect(occurrences).toBe(1);
 	});
 
-	test('formats trace with arrow prefix for nested imports', ({ expectSnapshot }) => {
+	test('formats trace with arrow prefix for nested imports', () => {
 		const error = new Error('Error') as ErrorWithTrace;
 		error.importTrace = ['/a.js', '/b.js', '/c.js'];
 

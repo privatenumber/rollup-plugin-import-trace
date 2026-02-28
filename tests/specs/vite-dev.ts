@@ -1,5 +1,7 @@
 import { setTimeout } from 'node:timers/promises';
-import { testSuite, expect } from 'manten';
+import {
+	describe, test, expect, expectSnapshot, onTestFail,
+} from 'manten';
 import { createFixture } from 'fs-fixture';
 import { viteServe } from '../utils/vite.js';
 import { expectMatchesInOrder } from '../utils/expect-matches-in-order.js';
@@ -11,8 +13,8 @@ import { importTrace } from '../../src/index.js';
  * In dev mode, the plugin detects the environment and avoids
  * unnecessary work (moduleParsed doesn't fire in Vite dev anyway).
  */
-export default testSuite('Vite dev', ({ test }) => {
-	test('plugin works without errors in dev mode', async ({ signal }) => {
+describe('Vite dev', () => {
+	test('plugin works without errors in dev mode', async ({ signal } = {} as never) => {
 		await using fixture = await createFixture({
 			'index.html': '<script type="module" src="/index.js"></script>',
 			'index.js': 'import { value } from "./a.js"; console.log(value);',
@@ -32,7 +34,7 @@ export default testSuite('Vite dev', ({ test }) => {
 		);
 	});
 
-	test('syntax error includes import trace', async ({ onTestFail, signal }) => {
+	test('syntax error includes import trace', async ({ signal } = {} as never) => {
 		await using fixture = await createFixture({
 			'index.html': `
 			<!DOCTYPE html>

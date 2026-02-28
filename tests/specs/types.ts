@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { testSuite } from 'manten';
+import { describe, test } from 'manten';
 import { createFixture } from 'fs-fixture';
 import spawn from 'nano-spawn';
 
@@ -20,8 +20,8 @@ const baseTsConfig = {
 	},
 };
 
-export default testSuite('Types', ({ describe }) => {
-	describe('Rollup', ({ test }) => {
+describe('Types', () => {
+	describe('Rollup', () => {
 		test('plugin works with rollup()', async () => {
 			await using fixture = await createFixture({
 				'tsconfig.json': JSON.stringify(baseTsConfig),
@@ -77,7 +77,7 @@ export default testSuite('Types', ({ describe }) => {
 		});
 	});
 
-	describe('Vite', ({ test }) => {
+	describe('Vite', () => {
 		test('plugin works with defineConfig()', async () => {
 			await using fixture = await createFixture({
 				'tsconfig.json': JSON.stringify(baseTsConfig),
