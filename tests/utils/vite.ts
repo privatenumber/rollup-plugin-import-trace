@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import type { Server } from 'node:http';
 import {
 	build,
@@ -72,7 +73,12 @@ export const viteServe = async <T>(
 	signal?: AbortSignal,
 ): Promise<T> => {
 	const server = await createServer({
-		root: fixturePath,
+		// On Windows CI, os.tmpdir() is an 8.3 short path (C:\Users\RUNNER~1\...).
+		// Vite later switches to fs.realpathSync.native, which expands it, so module
+		// IDs fall outside the short-path fs.allow root and Vite serves raw files
+		// instead of transforming them.
+		// https://github.com/vitejs/vite/blob/v7.3.1/packages/vite/src/node/utils.ts#L709-L736
+		root: fs.realpathSync.native(fixturePath),
 		configFile: false,
 		envFile: false,
 		logLevel: 'silent',

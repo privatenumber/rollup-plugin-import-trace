@@ -29,6 +29,9 @@ describe('Vite dev', () => {
 				// Fetch module to trigger transforms
 				const response = await fetch(`${url}/index.js`);
 				expect(response.ok).toBe(true);
+
+				// Vite rewrites relative imports, so a raw static response fails here
+				expect(await response.text()).toContain('from "/a.js"');
 			},
 			signal,
 		);
@@ -59,7 +62,10 @@ describe('Vite dev', () => {
 				// Vite processes imports lazily, so we must fetch the entire chain
 				await fetch(`${url}/index.js`);
 				await fetch(`${url}/a.js`);
-				await fetch(`${url}/b.js`);
+				const bResponse = await fetch(`${url}/b.js`);
+
+				// Fail fast if Vite served the raw file instead of transforming it
+				expect(await bResponse.text()).toContain('from "/broken.js"');
 
 				// Wait for module graph to include broken.js
 				// When b.js is transformed, Vite discovers the broken.js import
