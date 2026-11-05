@@ -43,4 +43,33 @@ describe('Vite build', () => {
 			'node_modules/some-lib/utils/broken.mjs',
 		]);
 	});
+
+	// commonjs--resolver loads node_modules files from its resolveId hook,
+	// so their syntax errors throw before Rollup records the import edge
+	test('syntax error in node_modules', async () => {
+		await using fixture = await createFixture({
+			'index.js': 'export { value } from "./a.js"',
+			'a.js': 'export { value } from "some-lib"',
+			'node_modules/some-lib': {
+				'package.json': JSON.stringify({
+					name: 'some-lib',
+					type: 'module',
+					exports: './index.js',
+				}),
+				'index.js': 'export { value } from "./broken.js"',
+				'broken.js': 'export const value = "unclosed string',
+			},
+		});
+
+		const error = await getBuildError(() => viteBuild(fixture.path, {
+			plugins: [importTrace()],
+		}));
+
+		expectTrace(error, fixture, [
+			'index.js',
+			'a.js',
+			'node_modules/some-lib/index.js',
+			'node_modules/some-lib/broken.js',
+		]);
+	});
 });

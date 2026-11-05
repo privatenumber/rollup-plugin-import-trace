@@ -38,6 +38,7 @@ type ViteErrorMiddleware = (
 ) => void;
 
 type RollupVitePlugin = Plugin & {
+	enforce?: 'pre' | 'post';
 	configureServer?: (server: ViteDevServer) => (() => void) | void;
 };
 
@@ -269,6 +270,13 @@ export const importTrace = (): RollupVitePlugin => {
 
 	return {
 		name: 'import-trace',
+
+		// Vite runs its own resolver (vite:resolve) before normal plugins, and it
+		// ends the resolveId chain. In builds, commonjs--resolver resolves every
+		// import through that chain and then loads the module, so a syntax error
+		// in node_modules throws from resolveId. Running first lets resolveId
+		// record the import before vite:resolve claims it. Rollup ignores this.
+		enforce: 'pre',
 
 		// Vite dev: return function to register post-middleware
 		configureServer: server => () => {
