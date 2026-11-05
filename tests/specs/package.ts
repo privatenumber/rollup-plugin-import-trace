@@ -3,6 +3,7 @@ import { describe, test, expect } from 'manten';
 import spawn from 'nano-spawn';
 import type { FileTree } from 'fs-fixture';
 import { createFixture } from '../utils/fixture.ts';
+import { formatTrace } from '../utils/trace.ts';
 
 /**
  * Tests the published entry points in dist/ (built by `pnpm test`),
@@ -103,10 +104,12 @@ describe('Package', () => {
 
 	for (const [format, file, imports] of [
 		['ESM', 'build.mjs', `
+			import { inspect } from 'node:util';
 			import { rollup } from 'rollup';
 			import { importTrace } from 'rollup-plugin-import-trace';
 		`],
 		['CommonJS', 'build.cjs', `
+			const { inspect } = require('node:util');
 			const { rollup } = require('rollup');
 			const { importTrace } = require('rollup-plugin-import-trace');
 		`],
@@ -118,17 +121,23 @@ describe('Package', () => {
 				[file]: `
 					${imports}
 					rollup({ input: 'index.js', plugins: [importTrace()] }).catch((error) => {
-						console.log(JSON.stringify(error.importTrace));
+						console.log(JSON.stringify({
+							importTrace: error.importTrace,
+							// What console.error(error) prints
+							inspected: inspect(error),
+						}));
 					});
 				`,
 				node_modules: linkDependencies(['rollup']),
 			});
 
 			const { stdout } = await spawn(process.execPath, [file], { cwd: fixture.path });
-			expect(JSON.parse(stdout)).toStrictEqual([
+			const { importTrace, inspected } = JSON.parse(stdout);
+			expect(importTrace).toStrictEqual([
 				fixture.getPath('index.js'),
 				fixture.getPath('broken.js'),
 			].map(filePath => filePath.replaceAll('\\', '/')));
+			expect(inspected).toContain(formatTrace(fixture, ['index.js', 'broken.js']));
 		});
 	}
 });

@@ -55,6 +55,24 @@ const formatTrace = (trace: string[]) => `${traceHeader}${trace
 	})
 	.join('\n')}\n`;
 
+// V8 formats error.stack on first access, so a stack read before the message
+// was patched keeps the old message. console.error() and util.inspect() print
+// the stack, so the trace must be added there too.
+const patchStack = (
+	error: object,
+	originalMessage: string,
+	patchedMessage: string,
+) => {
+	if (
+		'stack' in error
+		&& typeof error.stack === 'string'
+		&& originalMessage
+		&& !error.stack.includes(traceHeader)
+	) {
+		error.stack = error.stack.replace(originalMessage, () => patchedMessage);
+	}
+};
+
 /**
  * Patches an error's message with its import trace.
  * Reads the `importTrace` property and appends a formatted trace to the message.
@@ -69,7 +87,9 @@ export const patchErrorWithTrace = (error: unknown): void => {
 		&& Array.isArray(error.importTrace)
 		&& !error.message.includes(traceHeader)
 	) {
+		const originalMessage = error.message;
 		error.message += formatTrace(error.importTrace);
+		patchStack(error, originalMessage, error.message);
 	}
 };
 

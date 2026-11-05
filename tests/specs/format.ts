@@ -31,14 +31,28 @@ describe('patchErrorWithTrace', () => {
 		].join('\n'));
 	});
 
+	// V8 formats error.stack on first access, so a stack read before patching
+	// keeps the old message. console.error() and util.inspect() print the stack.
+	test('updates a stack that was already formatted', () => {
+		const error = createError(['/a.js', '/b.js']);
+		const originalStack = error.stack!;
+
+		patchErrorWithTrace(error);
+
+		expect(error.stack).toBe(originalStack.replace('Original message', error.message));
+	});
+
 	test('is idempotent', () => {
 		const error = createError(['/a.js', '/b.js']);
 
+		// Format the stack before patching
+		expect(error.stack).toContain('Original message');
 		patchErrorWithTrace(error);
-		const patched = error.message;
+		const { message, stack } = error;
 		patchErrorWithTrace(error);
 
-		expect(error.message).toBe(patched);
+		expect(error.message).toBe(message);
+		expect(error.stack).toBe(stack);
 	});
 
 	test('ignores errors without an importTrace array', () => {
