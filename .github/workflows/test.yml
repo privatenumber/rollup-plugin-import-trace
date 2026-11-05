@@ -18,31 +18,29 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # The pnpm store on a Dev Drive makes Windows installs faster
       - name: Setup Dev Drive
         if: runner.os == 'Windows'
-        uses: samypr100/setup-dev-drive@v3
+        uses: samypr100/setup-dev-drive@562171fe8df7401fdf582d766cd3b6ab80d5b1a0 # v4.1.0
         with:
           env-mapping: |
-            PNPM_HOME,{{ DEV_DRIVE }}/.pnpm
-            PNPM_STORE_DIR,{{ DEV_DRIVE }}/.pnpm-store
+            PNPM_CONFIG_STORE_DIR,{{ DEV_DRIVE }}/.pnpm-store
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Setup Node.js, pnpm, and dependencies
+        uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
         with:
-          node-version-file: .nvmrc
-          cache: pnpm
+          cache: true
+          require-lockfile: true
 
-      - name: Install dependencies
-        run: pnpm install
-
-      - name: Lint & Type check
+      - name: Lint
         if: runner.os == 'Linux'
-        run: pnpm concurrently "pnpm lint" "pnpm type-check"
+        run: pnpm lint
+
+      - name: Type check
+        if: runner.os == 'Linux'
+        run: pnpm type-check
 
       - name: Test
         run: pnpm test
