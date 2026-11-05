@@ -1,131 +1,61 @@
-import { setTimeout } from 'node:timers/promises';
-import {
-	describe, test, expect, onTestFail,
-} from 'manten';
-import { createFixture } from 'fs-fixture';
+import { describe, test, expect } from 'manten';
+import { createFixture } from '../utils/fixture.ts';
+import { formatTrace } from '../utils/trace.ts';
 import { viteServe } from '../utils/vite.ts';
-import { expectMatchesInOrder } from '../utils/expect-matches-in-order.ts';
 import { importTrace } from '../../src/index.ts';
 
-/**
- * Vite dev mode tests for rollup-plugin-import-trace
- *
- * In dev mode, the plugin detects the environment and avoids
- * unnecessary work (moduleParsed doesn't fire in Vite dev anyway).
- */
 describe('Vite dev', () => {
-	test('plugin works without errors in dev mode', async ({ signal } = {} as never) => {
+	test('serves transformed modules', async () => {
 		await using fixture = await createFixture({
-			'index.html': '<script type="module" src="/index.js"></script>',
 			'index.js': 'import { value } from "./a.js"; console.log(value);',
-			'a.js': 'import { value } from "./b.js"; export { value };',
-			'b.js': 'export const value = "hello";',
+			'a.js': 'export const value = "hello";',
 		});
+		await using dev = await viteServe(fixture.path, { plugins: [importTrace()] });
 
-		await viteServe(
-			fixture.path,
-			{ plugins: [importTrace()] },
-			async (url) => {
-				// Fetch module to trigger transforms
-				const response = await fetch(`${url}/index.js`);
-				expect(response.ok).toBe(true);
+		const response = await fetch(`${dev.url}/index.js`);
+		expect(response.status).toBe(200);
 
-				// Vite rewrites relative imports, so a raw static response fails here
-				expect(await response.text()).toContain('from "/a.js"');
-			},
-			signal,
-		);
+		// Vite rewrites relative imports, so a raw static response fails here
+		expect(await response.text()).toContain('from "/a.js"');
 	});
 
-	test('syntax error includes import trace', async ({ signal } = {} as never) => {
+	test('syntax error', async () => {
 		await using fixture = await createFixture({
-			'index.html': `
-			<!DOCTYPE html>
-			<html>
-			<body>
-				<script type="module" src="/index.js"></script>
-			</body>
-			</html>
-			`,
 			'index.js': 'import { value } from "./a.js"; console.log(value);',
 			'a.js': 'import { value } from "./b.js"; export { value };',
 			'b.js': 'import { value } from "./broken.js"; export { value };',
 			'broken.js': 'export const value = "unclosed',
 		});
+		await using dev = await viteServe(fixture.path, { plugins: [importTrace()] });
 
-		await viteServe(
-			fixture.path,
-			{ plugins: [importTrace()] },
-			async (url, server) => {
-				// Fetch modules in order to build up the moduleGraph
-				// (simulates browser following imports from entry point)
-				// Vite processes imports lazily, so we must fetch the entire chain
-				await fetch(`${url}/index.js`);
-				await fetch(`${url}/a.js`);
-				const bResponse = await fetch(`${url}/b.js`);
+		// Vite builds the module graph lazily, like a browser following imports
+		for (const file of ['index.js', 'a.js', 'b.js']) {
+			const response = await fetch(`${dev.url}/${file}`);
+			expect(response.status).toBe(200);
+		}
 
-				// Fail fast if Vite served the raw file instead of transforming it
-				expect(await bResponse.text()).toContain('from "/broken.js"');
+		const response = await fetch(`${dev.url}/broken.js`);
+		expect(response.status).toBe(500);
 
-				// Wait for module graph to include broken.js
-				// When b.js is transformed, Vite discovers the broken.js import
-				// Check both maps: urlToModuleMap is reliably populated on Windows
-				// while idToModuleMap may not be
-				const hasBrokenModule = () => {
-					const urlKeys = Array.from(server.moduleGraph.urlToModuleMap.keys());
-					return urlKeys.some(moduleUrl => moduleUrl.endsWith('broken.js'));
-				};
-				while (!signal.aborted && !hasBrokenModule()) {
-					await setTimeout(100);
-				}
-
-				// Request the broken module - Vite returns 500 with error HTML
-				const response = await fetch(`${url}/broken.js`);
-				const html = await response.text();
-				onTestFail(() => {
-					const brokenModule = server.moduleGraph.getModuleById(
-						fixture.getPath('broken.js'),
-					);
-					console.log({
-						response,
-						html,
-						moduleGraphUrls: Array.from(server.moduleGraph.urlToModuleMap.keys()),
-						brokenModule: brokenModule
-							? {
-								id: brokenModule.id,
-								url: brokenModule.url,
-								transformResult: brokenModule.transformResult,
-								importers: [...brokenModule.importers].map(m => m.id),
-							}
-							: null,
-					});
-				});
-				expect(response.status).toBe(500);
-
-				// The error HTML contains JSON-serialized error object on a single line
-				const errorMatch = html.match(/const error = (.+)/);
-				expect(errorMatch).toBeTruthy();
-
-				const errorJson = JSON.parse(errorMatch![1].replaceAll(String.raw`\u003c`, '<'));
-
-				// Verify error details
-				expect(errorJson.message).toContain('invalid JS syntax');
-				expect(errorJson.id).toContain('broken.js');
-
-				// Verify import trace shows chain in order
-				// Chain: index.js → a.js → b.js → broken.js
-				expectMatchesInOrder(errorJson.message, [
-					/Import trace:\n/,
-					/index\.js\n/,
-					/↳.*a\.js\n/,
-					/↳.*b\.js\n/,
-					/↳.*broken\.js/,
-				]);
-			},
-			signal,
+		// Vite also logs a "Pre-transform error" when it pre-transforms b.js's
+		// imports; only the request error goes through the error middleware
+		const requestErrors = dev.errors.filter(message => message.startsWith('Internal server error'));
+		expect(requestErrors).toHaveLength(1);
+		expect(requestErrors[0]).toContain(
+			formatTrace(fixture, ['index.js', 'a.js', 'b.js', 'broken.js']),
 		);
-	}, {
-		timeout: 20_000,
-		retry: 3,
+	});
+
+	test('no trace for a module without importers', async () => {
+		await using fixture = await createFixture({
+			'broken.js': 'export const value = "unclosed',
+		});
+		await using dev = await viteServe(fixture.path, { plugins: [importTrace()] });
+
+		const response = await fetch(`${dev.url}/broken.js`);
+		expect(response.status).toBe(500);
+		expect(dev.errors).toHaveLength(1);
+		expect(dev.errors[0]).toMatch(/^Internal server error/);
+		expect(dev.errors[0]).not.toContain('Import trace:');
 	});
 });
