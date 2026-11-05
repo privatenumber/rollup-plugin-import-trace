@@ -1,77 +1,46 @@
-import {
-	describe, test, expect,
-} from 'manten';
-import { createFixture } from 'fs-fixture';
+import { describe, test } from 'manten';
+import { createFixture } from '../utils/fixture.ts';
+import { getBuildError, expectTrace } from '../utils/trace.ts';
 import { viteBuild } from '../utils/vite.ts';
-import { importTrace, type RollupErrorWithTrace } from '../../src/index.ts';
+import { importTrace } from '../../src/index.ts';
 
-/**
- * Vite build mode tests for rollup-plugin-import-trace
- *
- * Vite build uses Rollup under the hood, so errors are enhanced
- * the same way as pure Rollup builds.
- */
 describe('Vite build', () => {
-	test('enhances build errors with import trace', async () => {
+	test('syntax error', async () => {
 		await using fixture = await createFixture({
 			'index.js': 'export { value } from "./a.js"',
 			'a.js': 'export { value } from "./b.js"',
-			'b.js': 'export { value } from "./c.js"',
-			'c.js': 'export { value } from "./broken.js"',
+			'b.js': 'export { value } from "./broken.js"',
 			'broken.js': 'export const value = "unclosed string',
 		});
 
-		const result = await viteBuild(fixture.path, {
+		const error = await getBuildError(() => viteBuild(fixture.path, {
 			plugins: [importTrace()],
-		});
+		}));
 
-		expect(result.success).toBe(false);
-		expect(result.errors).toHaveLength(1);
-
-		const error = result.errors[0] as RollupErrorWithTrace;
-		expect(error.importTrace).toBeDefined();
-		expect(error.importTrace![0]).toContain('index.js');
-		expect(error.importTrace!.at(-1)).toContain('broken.js');
+		expectTrace(error, fixture, ['index.js', 'a.js', 'b.js', 'broken.js']);
 	});
 
-	test('traces errors through node_modules', async () => {
-	/**
-	 * Simulates error deep in node_modules using ESM modules.
-	 * Uses .mjs extension to ensure Vite treats them as ESM.
-	 */
+	test('syntax error in an ESM file under node_modules', async () => {
 		await using fixture = await createFixture({
-			'index.js': `
-				import { helper } from './node_modules/some-lib/index.mjs'
-			`,
+			'index.js': 'import { helper } from "./node_modules/some-lib/index.mjs"',
 			'node_modules/some-lib': {
-				'index.mjs': `
-					export { helper } from './utils/helper.mjs'
-				`,
+				'index.mjs': 'export { helper } from "./utils/helper.mjs"',
 				utils: {
-					'helper.mjs': `
-						import './broken.mjs'
-						export const helper = () => {}
-					`,
-					'broken.mjs': `
-						invalid syntax {{{
-					`,
+					'helper.mjs': 'import "./broken.mjs"; export const helper = () => {};',
+					'broken.mjs': 'invalid syntax {{{',
 				},
 			},
 		});
 
-		const result = await viteBuild(fixture.path, {
+		const error = await getBuildError(() => viteBuild(fixture.path, {
 			plugins: [importTrace()],
-		});
+		}));
 
-		expect(result.success).toBe(false);
-		expect(result.errors).toHaveLength(1);
-
-		const error = result.errors[0] as RollupErrorWithTrace;
-		expect(error.importTrace).toBeDefined();
-		expect(error.importTrace).toHaveLength(4);
-		expect(error.importTrace![0]).toContain('index.js');
-		expect(error.importTrace![1]).toMatch(/some-lib/);
-		expect(error.importTrace![2]).toContain('helper.mjs');
-		expect(error.importTrace![3]).toContain('broken.mjs');
+		expectTrace(error, fixture, [
+			'index.js',
+			'node_modules/some-lib/index.mjs',
+			'node_modules/some-lib/utils/helper.mjs',
+			'node_modules/some-lib/utils/broken.mjs',
+		]);
 	});
 });
