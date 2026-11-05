@@ -1,5 +1,5 @@
 import {
-	describe, test, expect, expectSnapshot, onTestFail,
+	describe, test, expect, expectSnapshot,
 } from 'manten';
 import { patchErrorWithTrace } from '../../src/index.js';
 

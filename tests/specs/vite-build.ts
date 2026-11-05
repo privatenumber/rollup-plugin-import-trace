@@ -1,5 +1,5 @@
 import {
-	describe, test, expect, expectSnapshot, onTestFail,
+	describe, test, expect,
 } from 'manten';
 import { createFixture } from 'fs-fixture';
 import { viteBuild } from '../utils/vite.js';

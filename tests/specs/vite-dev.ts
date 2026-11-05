@@ -1,6 +1,6 @@
 import { setTimeout } from 'node:timers/promises';
 import {
-	describe, test, expect, expectSnapshot, onTestFail,
+	describe, test, expect, onTestFail,
 } from 'manten';
 import { createFixture } from 'fs-fixture';
 import { viteServe } from '../utils/vite.js';
