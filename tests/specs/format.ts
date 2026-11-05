@@ -69,12 +69,49 @@ describe('patchErrorWithTrace', () => {
 		expect(error.stack).toMatch(/^Error: Error\n\nImport trace:\n/);
 	});
 
+	// Rollup keeps the header of a stack it copies from another error
+	test('rewrites a copied stack whose header has another name', () => {
+		const error = createError(['/a.js', '/b.js']);
+		error.name = 'RollupError';
+		error.stack = 'Error: Original message\n    at f (file.js:1:1)';
+
+		patchErrorWithTrace(error);
+
+		expect(error.stack).toBe(`Error: Original message${trace}\n    at f (file.js:1:1)`);
+	});
+
+	// V8's header for an empty message is the name alone
+	test('patches an error with an empty message', () => {
+		// eslint-disable-next-line unicorn/error-message -- the empty message is the case under test
+		const error = Object.assign(new Error(''), { importTrace: ['/a.js', '/b.js'] });
+		expect(error.stack).toMatch(/^Error\n {4}at /);
+
+		patchErrorWithTrace(error);
+
+		expect(error.message).toBe(trace);
+		expect(error.stack).toMatch(/^Error: \n\nImport trace:\n {4}\/a\.js\n {4}↳ \/b\.js\n\n {4}at /);
+	});
+
+	test('patches the message when the stack cannot be read', () => {
+		const error = createError(['/a.js', '/b.js']);
+		Object.defineProperty(error, 'stack', {
+			get: () => {
+				throw new Error('Refused');
+			},
+		});
+
+		patchErrorWithTrace(error);
+
+		expect(error.message).toBe(`Original message${trace}`);
+	});
+
 	// A stack whose header is not the current message was changed by someone
 	// else, so there is no safe place to insert the trace
 	test('leaves a stack whose header does not match the message', () => {
 		for (const stack of [
 			'Error: Other message\n    at f (file.js:1:1)',
 			'Error: Original message plus more\n    at f (file.js:1:1)',
+			'Error: Original message\nExtra context\n    at f (file.js:1:1)',
 		]) {
 			const error = createError(['/a.js', '/b.js']);
 			error.stack = stack;
@@ -94,9 +131,11 @@ describe('patchErrorWithTrace', () => {
 		});
 
 		patchErrorWithTrace(error);
+		patchErrorWithTrace(error);
 
 		expect(error.message).toBe('Original message');
 		expect(error.stack).toMatch(/^Error: Original message\n\nImport trace:\n/);
+		expect(error.stack!.split('Import trace:')).toHaveLength(2);
 	});
 
 	test('keeps an error whose stack cannot be changed', () => {
@@ -125,15 +164,24 @@ describe('patchErrorWithTrace', () => {
 	});
 
 	test('keeps an error whose stack assignment is refused', () => {
+		let stackAssignments = 0;
 		const error = new Proxy(createError(['/a.js', '/b.js']), {
-			set: (target, key, value) => key !== 'stack' && Reflect.set(target, key, value),
+			get: (target, key) => Reflect.get(target, key, target),
+			set: (target, key, value) => {
+				if (key === 'stack') {
+					stackAssignments += 1;
+					return false;
+				}
+				return Reflect.set(target, key, value);
+			},
 		});
 
 		expect(() => patchErrorWithTrace(error)).not.toThrow();
+		expect(stackAssignments).toBe(1);
 		expect(error.message).toContain('Import trace:');
 	});
 
-	// V8's stack setter still works on a frozen error, so only the message stays
+	// Whether a frozen error's stack can change depends on the Node.js version
 	test('keeps a frozen error', () => {
 		const error = Object.freeze(createError(['/a.js', '/b.js']));
 
@@ -143,13 +191,20 @@ describe('patchErrorWithTrace', () => {
 	});
 
 	test('keeps an error whose importTrace cannot be read', () => {
+		let importTraceReads = 0;
 		const error = new Proxy(createError(['/a.js']), {
-			has: () => {
-				throw new Error('Refused');
+			has: (target, key) => {
+				if (key === 'importTrace') {
+					importTraceReads += 1;
+					throw new Error('Refused');
+				}
+				return Reflect.has(target, key);
 			},
 		});
 
 		expect(() => patchErrorWithTrace(error)).not.toThrow();
+		expect(importTraceReads).toBe(1);
+		expect(error.message).toBe('Original message');
 	});
 
 	test('is idempotent', () => {

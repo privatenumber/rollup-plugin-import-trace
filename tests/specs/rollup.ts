@@ -1,4 +1,4 @@
-import { describe, test } from 'manten';
+import { describe, test, expect } from 'manten';
 import { rollup, type Plugin } from 'rollup';
 import nodeResolve from '@rollup/plugin-node-resolve';
 import { createFixture } from '../utils/fixture.ts';
@@ -276,6 +276,70 @@ describe('Rollup', () => {
 				expectTrace(error, fixture, ['index.js', 'a.js', 'b.js']);
 			});
 		}
+	});
+
+	describe('errors that refuse changes', () => {
+		// A Proxy that throws on a read must not replace the original error
+		test('original error survives a throwing property read', async () => {
+			await using fixture = await createFixture({
+				'index.js': 'export { value } from "./a.js"',
+				'a.js': 'export const value = 1',
+			});
+			const original = new Error('Original failure');
+
+			const error = await getBuildError(() => rollup({
+				input: fixture.getPath('index.js'),
+				plugins: [
+					importTrace(),
+					{
+						name: 'throw-proxy',
+						transform: (_code, id) => {
+							if (id.endsWith('a.js')) {
+								throw new Proxy(original, {
+									get: (target, key) => {
+										if (key === 'id') {
+											throw new Error('Refused');
+										}
+										return Reflect.get(target, key, target);
+									},
+								});
+							}
+						},
+					},
+				],
+			}));
+
+			expect(error.message).toContain('Original failure');
+			expect(error.message).not.toContain('Refused');
+		});
+
+		// A setter can accept importTrace without storing it
+		test('no stale trace when importTrace is not stored', async () => {
+			await using fixture = await createFixture({
+				'index.js': 'export { value } from "./a.js"',
+				'a.js': 'export const value = 1',
+			});
+
+			const error = await getBuildError(() => rollup({
+				input: fixture.getPath('index.js'),
+				plugins: [
+					importTrace(),
+					{
+						name: 'stale-trace',
+						transform: (_code, id) => {
+							if (id.endsWith('a.js')) {
+								throw Object.defineProperty(new Error('Original failure'), 'importTrace', {
+									get: () => ['/unrelated.js'],
+									set: () => {},
+								});
+							}
+						},
+					},
+				],
+			}));
+
+			expect(error.message).not.toContain('/unrelated.js');
+		});
 	});
 
 	describe('plugin instance reuse', () => {
