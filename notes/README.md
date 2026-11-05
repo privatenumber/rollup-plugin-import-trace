@@ -10,7 +10,7 @@ Each upstream folder owns that tool's behavior, implementation, configuration, a
 
 | Folder | Owns |
 | --- | --- |
-| [vite/](./vite/README.md) | Vite dev server behavior the plugin and its tests depend on |
+| [vite/](./vite/README.md) | Vite dev server and build behavior the plugin and its tests depend on |
 | [rollup-plugin-import-trace/](./rollup-plugin-import-trace/README.md) | Project policy, integration, and cross-tool synthesis |
 
 ## Evidence
