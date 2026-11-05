@@ -66,7 +66,7 @@ describe('Package', () => {
 		await spawn(path.join(nodeModulesPath, '.bin/tsc'), [], { cwd: fixture.path });
 	});
 
-	// node16 resolution picks types by condition: a static import in a .cts
+	// node16 resolution picks types by condition: a value import in a .cts
 	// file compiles to require, so it must get CommonJS declarations
 	test('types for node16 ESM and CommonJS consumers', async () => {
 		await using fixture = await createFixture({
