@@ -3,9 +3,9 @@ import {
 	describe, test, expect, onTestFail,
 } from 'manten';
 import { createFixture } from 'fs-fixture';
-import { viteServe } from '../utils/vite.js';
-import { expectMatchesInOrder } from '../utils/expect-matches-in-order.js';
-import { importTrace } from '../../src/index.js';
+import { viteServe } from '../utils/vite.ts';
+import { expectMatchesInOrder } from '../utils/expect-matches-in-order.ts';
+import { importTrace } from '../../src/index.ts';
 
 /**
  * Vite dev mode tests for rollup-plugin-import-trace

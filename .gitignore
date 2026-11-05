@@ -28,5 +28,5 @@ dist
 # Claude
 CLAUDE.local.md
 
-# Agent skills from npm packages (managed by skills-npm)
-**/skills/npm-*
+# Agent skill links from dependencies (managed by pnpm)
+/.agents/skills/

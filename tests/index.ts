@@ -6,9 +6,9 @@ setProcessTimeout(2 * 60 * 1000);
 configure({ snapshotPath: 'tests/.manten.snap' });
 
 describe('rollup-plugin-import-trace', () => {
-	import('./specs/rollup.js');
-	import('./specs/vite-build.js');
-	import('./specs/vite-dev.js');
-	import('./specs/patch-error.js');
-	import('./specs/types.js');
+	import('./specs/rollup.ts');
+	import('./specs/vite-build.ts');
+	import('./specs/vite-dev.ts');
+	import('./specs/patch-error.ts');
+	import('./specs/types.ts');
 });

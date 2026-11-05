@@ -1,10 +1,13 @@
 {
 	"compilerOptions": {
-		// Node 18
+		// engines.node >=20.20
 		"target": "ES2022",
 		"moduleDetection": "force",
 		"module": "Preserve",
 		"resolveJsonModule": true,
+		"types": [
+			"node",
+		],
 		"allowImportingTsExtensions": true,
 		"strict": true,
 		"noEmit": true,
