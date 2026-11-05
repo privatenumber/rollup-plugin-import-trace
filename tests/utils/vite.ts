@@ -1,4 +1,5 @@
 import type { Server } from 'node:http';
+import { stripVTControlCharacters } from 'node:util';
 import {
 	build,
 	createLogger,
@@ -39,8 +40,9 @@ export const viteServe = async (
 ) => {
 	const errors: string[] = [];
 	const logger = createLogger('silent');
+	// Vite colors messages when it detects CI
 	logger.error = (message) => {
-		errors.push(message);
+		errors.push(stripVTControlCharacters(message));
 	};
 
 	const server = await createServer({
