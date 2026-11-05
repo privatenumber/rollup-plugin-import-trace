@@ -29,7 +29,7 @@ Vite also logs a `Pre-transform error` for the same syntax error, without a trac
 [`tests/specs/package.ts`](../../tests/specs/package.ts) imports the package by name from a fixture whose `node_modules` links to the repository, so resolution goes through `package.json#exports` to `dist/`:
 
 - One `tsc` run with `bundler` resolution type-checks Rollup and Vite config files. The `import` condition gives them `dist/index.d.mts`.
-- One `tsc` run with `node16` resolution type-checks an `.mts` and a `.cts` consumer. A `.cts` file resolves the `require` condition and must get `dist/index.d.cts`; an ESM-only declaration fails it with `TS1479`.
+- One `tsc` run with `node16` resolution type-checks an `.mts` and a `.cts` consumer. A static `import` in a `.cts` file compiles to `require`, so it resolves the `require` condition and must get `dist/index.d.cts`; an ESM-only declaration fails it with `TS1479`. A dynamic `import()` in a `.cts` file resolves the `import` condition instead.
 - One Rollup build each from an ESM and a CommonJS script checks that both `dist/index.mjs` and `dist/index.cjs` attach traces.
 
 All other specs import `src/` directly, so these are the only tests of the published files.
