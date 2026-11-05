@@ -45,6 +45,63 @@ describe('patchErrorWithTrace', () => {
 		expect(error.stack).toBe(originalStack.replace('Original message', error.message));
 	});
 
+	// Reading the stack would make V8 format it with the message at that time
+	test('leaves an unformatted stack to reflect later message changes', () => {
+		const error = createError(['/a.js', '/b.js']);
+
+		patchErrorWithTrace(error);
+		error.message = `[plugin] ${error.message}`;
+
+		expect(error.stack).toMatch(/^Error: \[plugin\] Original message\n\nImport trace:\n/);
+	});
+
+	test('adds the trace to a stack whose message changed after formatting', () => {
+		for (const message of ['Original message', '']) {
+			const error = createError(['/a.js', '/b.js']);
+			const originalStack = error.stack!;
+			error.message = message === '' ? '' : 'Changed message';
+
+			patchErrorWithTrace(error);
+
+			const framesIndex = originalStack.indexOf('\n    at ');
+			const header = originalStack.slice(0, framesIndex);
+			const frames = originalStack.slice(framesIndex);
+			expect(error.stack).toBe(`${header}\n\nImport trace:\n    /a.js\n    ↳ /b.js\n${frames}`);
+		}
+	});
+
+	test('inserts the trace after the message, not after a matching error name', () => {
+		const error = Object.assign(new Error('Error'), { importTrace: ['/a.js', '/b.js'] });
+		expect(error.stack).toMatch(/^Error: Error\n/);
+
+		patchErrorWithTrace(error);
+
+		expect(error.stack).toMatch(/^Error: Error\n\nImport trace:\n/);
+	});
+
+	test('repairs the stack when the message already has the trace', () => {
+		const error = createError(['/a.js', '/b.js']);
+		expect(error.stack).toContain('Original message');
+		error.message += '\n\nImport trace:\n    /a.js\n    ↳ /b.js\n';
+
+		patchErrorWithTrace(error);
+
+		expect(error.stack).toContain('\n\nImport trace:\n    /a.js\n    ↳ /b.js\n');
+	});
+
+	test('keeps an error whose stack cannot be changed', () => {
+		const error = createError(['/a.js', '/b.js']);
+		Object.defineProperty(error, 'stack', {
+			value: 'Error: Original message\n    at f (file.js:1:1)',
+			writable: false,
+			configurable: false,
+		});
+
+		expect(() => patchErrorWithTrace(error)).not.toThrow();
+		expect(error.message).toContain('Import trace:');
+		expect(error.stack).toBe('Error: Original message\n    at f (file.js:1:1)');
+	});
+
 	test('is idempotent', () => {
 		const error = createError(['/a.js', '/b.js']);
 

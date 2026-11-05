@@ -55,42 +55,81 @@ const formatTrace = (trace: string[]) => `${traceHeader}${trace
 	})
 	.join('\n')}\n`;
 
-// V8 formats error.stack on first access, so a stack read before the message
-// was patched keeps the old message. console.error() and util.inspect() print
-// the stack, so the trace must be added there too.
-const patchStack = (
-	error: object,
-	originalMessage: string,
-	patchedMessage: string,
-) => {
-	if (
-		'stack' in error
-		&& typeof error.stack === 'string'
-		&& originalMessage
-		&& !error.stack.includes(traceHeader)
-	) {
-		error.stack = error.stack.replace(originalMessage, () => patchedMessage);
+const framesPattern = /\n\s+at /;
+
+// Insert the trace between the stack header (name and message) and its frames
+const insertTrace = (stack: string, trace: string) => {
+	if (stack.includes(traceHeader)) {
+		return stack;
 	}
+
+	const framesIndex = stack.search(framesPattern);
+	return framesIndex === -1
+		? stack + trace
+		: stack.slice(0, framesIndex) + trace + stack.slice(framesIndex);
+};
+
+const patchedStacks = new WeakSet<object>();
+
+// console.error() and util.inspect() print error.stack, not error.message.
+// V8 formats the stack on first access with the message at that time, so a
+// stack read before the message was patched lacks the trace. Reading it here
+// would format it early and hide later message changes, so the accessor is
+// wrapped to insert the trace on read. A stack that cannot be redefined or
+// written is left as is, so the original error still propagates.
+const patchStack = (error: object, trace: string) => {
+	const descriptor = Object.getOwnPropertyDescriptor(error, 'stack');
+	if (!descriptor || patchedStacks.has(error)) {
+		return;
+	}
+
+	const { get, set } = descriptor;
+	if (get && descriptor.configurable) {
+		Object.defineProperty(error, 'stack', {
+			configurable: true,
+			enumerable: descriptor.enumerable,
+			get: () => {
+				const stack: unknown = get.call(error);
+				return typeof stack === 'string' ? insertTrace(stack, trace) : stack;
+			},
+			set: set && ((value: unknown) => set.call(error, value)),
+		});
+	} else if (descriptor.writable && typeof descriptor.value === 'string') {
+		Object.defineProperty(error, 'stack', {
+			...descriptor,
+			value: insertTrace(descriptor.value, trace),
+		});
+	} else {
+		return;
+	}
+
+	patchedStacks.add(error);
 };
 
 /**
  * Patches an error's message with its import trace.
- * Reads the `importTrace` property and appends a formatted trace to the message.
+ * Reads the `importTrace` property and appends a formatted trace to the message
+ * and to the stack.
  */
 export const patchErrorWithTrace = (error: unknown): void => {
 	if (
-		typeof error === 'object'
-		&& error !== null
-		&& 'message' in error
+		typeof error !== 'object'
+		|| error === null
+		|| !('importTrace' in error)
+		|| !Array.isArray(error.importTrace)
+	) {
+		return;
+	}
+
+	const trace = formatTrace(error.importTrace);
+	if (
+		'message' in error
 		&& typeof error.message === 'string'
-		&& 'importTrace' in error
-		&& Array.isArray(error.importTrace)
 		&& !error.message.includes(traceHeader)
 	) {
-		const originalMessage = error.message;
-		error.message += formatTrace(error.importTrace);
-		patchStack(error, originalMessage, error.message);
+		error.message += trace;
 	}
+	patchStack(error, trace);
 };
 
 // Rollup uses OS-native path separators for module IDs on Windows,
