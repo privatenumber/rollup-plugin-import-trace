@@ -31,7 +31,7 @@
 		"import": "./dist/index.mjs",
 		"require": "./dist/index.cjs"
 	},
-	"packageManager": "pnpm@10.20.0",
+	"packageManager": "pnpm@12.16.1",
 	"scripts": {
 		"build": "pkgroll --minify",
 		"test": "pnpm build && tsx tests/index.ts",
