@@ -4,7 +4,7 @@ import {
 import { rollup } from 'rollup';
 import { createFixture } from 'fs-fixture';
 import nodeResolve from '@rollup/plugin-node-resolve';
-import { importTrace, type RollupErrorWithTrace } from '../../src/index.js';
+import { importTrace, type RollupErrorWithTrace } from '../../src/index.ts';
 
 /**
  * Rollup tests for rollup-plugin-import-trace

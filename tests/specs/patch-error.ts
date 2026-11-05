@@ -1,7 +1,7 @@
 import {
 	describe, test, expect, expectSnapshot,
 } from 'manten';
-import { patchErrorWithTrace } from '../../src/index.js';
+import { patchErrorWithTrace } from '../../src/index.ts';
 
 type ErrorWithTrace = Error & { importTrace?: string[] };
 

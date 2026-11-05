@@ -2,8 +2,8 @@ import {
 	describe, test, expect,
 } from 'manten';
 import { createFixture } from 'fs-fixture';
-import { viteBuild } from '../utils/vite.js';
-import { importTrace, type RollupErrorWithTrace } from '../../src/index.js';
+import { viteBuild } from '../utils/vite.ts';
+import { importTrace, type RollupErrorWithTrace } from '../../src/index.ts';
 
 /**
  * Vite build mode tests for rollup-plugin-import-trace
