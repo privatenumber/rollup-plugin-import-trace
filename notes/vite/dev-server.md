@@ -4,11 +4,11 @@ Last verified against Vite 7.3.1 source and Vite 7.3.7 behavior, 2026-11-05.
 
 ## Short-path roots make the dev server serve raw files
 
-On Windows, a dev server whose `root` is an 8.3 short path, such as `C:\Users\RUNNER~1\...`, can stop transforming modules partway through a process. After that point it serves every module as a raw static file with status 200, and the module graph stays empty. GitHub's `windows-latest` runners return such a path from `os.tmpdir()`.
+On Windows, a dev server whose `root` is an 8.3 short path, such as `C:\Users\RUNNER~1\...`, can stop transforming files partway through a process. After that point, files that Vite loads from disk are served as raw static files with status 200 and are not added to the module graph. Modules that a plugin `load` hook returns are not affected. GitHub's `windows-latest` runners return such a path from `os.tmpdir()`.
 
 ### Mechanism
 
-1. On Windows, `safeRealpathSync` starts as JS `fs.realpathSync`, which keeps short names. On first use it starts `exec('net use')`. When that command finishes, Vite switches to `fs.realpathSync.native`, which expands short names to long names ([`utils.ts#L680-L736`](https://github.com/vitejs/vite/blob/v7.3.1/packages/vite/src/node/utils.ts#L680-L736)).
+1. On Windows, `safeRealpathSync` starts as JS `fs.realpathSync`, which keeps short names. On first use it starts `exec('net use')`. When that command succeeds and finds no mapped network drives, Vite switches to `fs.realpathSync.native`, which expands short names to long names. With mapped drives it switches to a wrapper around the same native function. It keeps JS `fs.realpathSync` if native realpath fails with `EISDIR` or `net use` fails ([`utils.ts#L680-L736`](https://github.com/vitejs/vite/blob/v7.3.1/packages/vite/src/node/utils.ts#L680-L736)).
 2. Module IDs then use the long path, but `server.fs.allow` still comes from the short-path `root`. `isFileLoadingAllowed` returns false ([`static.ts#L292-L312`](https://github.com/vitejs/vite/blob/v7.3.1/packages/vite/src/node/server/middlewares/static.ts#L292-L312)).
 3. `loadAndTransform` skips the file read and throws `ERR_LOAD_URL` before it adds the module to the graph ([`transformRequest.ts#L260-L336`](https://github.com/vitejs/vite/blob/v7.3.1/packages/vite/src/node/server/transformRequest.ts#L260-L336)).
 4. The transform middleware handles `ERR_LOAD_URL` by calling `next()` ([`transform.ts#L320-L323`](https://github.com/vitejs/vite/blob/v7.3.1/packages/vite/src/node/server/middlewares/transform.ts#L320-L323)), so the static middleware serves the untransformed file.

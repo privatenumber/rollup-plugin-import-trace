@@ -19,4 +19,28 @@ describe('Vite build', () => {
 
 		expectTrace(error, fixture, ['index.js', 'a.js', 'b.js', 'broken.js']);
 	});
+
+	test('syntax error in an ESM file under node_modules', async () => {
+		await using fixture = await createFixture({
+			'index.js': 'import { helper } from "./node_modules/some-lib/index.mjs"',
+			'node_modules/some-lib': {
+				'index.mjs': 'export { helper } from "./utils/helper.mjs"',
+				utils: {
+					'helper.mjs': 'import "./broken.mjs"; export const helper = () => {};',
+					'broken.mjs': 'invalid syntax {{{',
+				},
+			},
+		});
+
+		const error = await getBuildError(() => viteBuild(fixture.path, {
+			plugins: [importTrace()],
+		}));
+
+		expectTrace(error, fixture, [
+			'index.js',
+			'node_modules/some-lib/index.mjs',
+			'node_modules/some-lib/utils/helper.mjs',
+			'node_modules/some-lib/utils/broken.mjs',
+		]);
+	});
 });

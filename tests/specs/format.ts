@@ -7,6 +7,14 @@ const createError = (importTrace?: unknown) => Object.assign(
 );
 
 describe('patchErrorWithTrace', () => {
+	test('formats a single-entry trace', () => {
+		const error = createError(['/a.js']);
+
+		patchErrorWithTrace(error);
+
+		expect(error.message).toBe('Original message\n\nImport trace:\n    /a.js\n');
+	});
+
 	test('appends the trace to the message', () => {
 		const error = createError(['/a.js', '/b.js', '/c.js']);
 

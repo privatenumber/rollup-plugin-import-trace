@@ -38,11 +38,18 @@ export const expectTrace = (
 	files: string[],
 ) => {
 	expect(error.importTrace).toStrictEqual(files.map(file => slash(fixture.getPath(file))));
-	expect(error.message).toContain(formatTrace(fixture, files));
+
+	// Exactly one block, not followed by another trace entry. Vite appends
+	// a file location and code frame after it.
+	const trace = formatTrace(fixture, files);
+	const traceIndex = error.message.indexOf(trace);
+	expect(traceIndex).not.toBe(-1);
+	expect(error.message.split('Import trace:')).toHaveLength(2);
+	expect(error.message.slice(traceIndex + trace.length)).not.toMatch(/^ {4}/);
 };
 
 /**
- * Assert that the plugin left the error untouched
+ * Assert that the plugin attached no trace
  */
 export const expectNoTrace = (error: RollupErrorWithTrace) => {
 	expect(error.importTrace).toBeUndefined();

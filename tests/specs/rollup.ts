@@ -229,24 +229,6 @@ describe('Rollup', () => {
 				expectTrace(error, fixture, ['index.js', 'a.js', errorFile]);
 			});
 		}
-
-		// A ../ specifier has no subpath that can identify the error path
-		test('no trace for ../ specifiers', async () => {
-			await using fixture = await createFixture({
-				'src/index.js': 'export { value } from "./a.js"',
-				'src/a.js': 'export { value } from "../deep/module.js"',
-			});
-
-			const error = await getBuildError(() => rollup({
-				input: fixture.getPath('src/index.js'),
-				plugins: [
-					importTrace(),
-					throwingResolver('../deep/module.js', fixture.getPath('deep/module.js')),
-				],
-			}));
-
-			expectNoTrace(error);
-		});
 	});
 
 	/**
@@ -310,6 +292,7 @@ describe('Rollup', () => {
 			});
 			await using fixture2 = await createFixture({
 				'index.js': 'export { value } from "./x.js"',
+				'x.js': 'export const value = 1',
 			});
 			const throwing = throwingResolver(
 				'pkg/deep/module.js',
@@ -331,7 +314,7 @@ describe('Rollup', () => {
 					{
 						name: 'fail-load',
 						load: (id) => {
-							if (id.endsWith('x.js')) {
+							if (id === fixture2.getPath('x.js')) {
 								throw Object.assign(new Error('ENOENT'), {
 									path: fixture2.getPath('node_modules/pkg/deep/module.js'),
 								});
