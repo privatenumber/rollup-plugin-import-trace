@@ -80,6 +80,17 @@ const insertTrace = (stack: string, trace: string) => {
 	return `${header}${trace}\n${frames}`;
 };
 
+// The trace is best-effort. An error object can refuse any read or write,
+// such as a frozen error or a Proxy, and the original error must still reach
+// the caller.
+const attempt = (action: () => void) => {
+	try {
+		action();
+	} catch {
+		// Leave the error as it is
+	}
+};
+
 // Node.js 22 and newer expose error.stack as an accessor that formats the
 // stack on first read, so its descriptor can be inspected without formatting
 // it. Node.js 20 exposes a data property, and reading its descriptor formats
@@ -91,54 +102,58 @@ const isStackAccessorLazy = () => {
 	return hasLazyStackAccessor;
 };
 
-const stackGetters = new WeakSet<() => unknown>();
+// The latest trace for each error whose stack accessor is wrapped, so a
+// reused error shows its current trace
+const stackTraces = new WeakMap<object, string>();
 
-// console.error() and util.inspect() print error.stack, not error.message.
+// console.error() and util.inspect() print error.stack when there is one.
 // V8 formats the stack on first access with the message at that time, so a
 // stack read before the message was patched lacks the trace. Reading it here
-// would format it early and hide later message changes, so the accessor is
-// wrapped to insert the trace on read.
+// would format it early and hide later message changes, so only a native
+// stack accessor is patched: it is wrapped to insert the trace on read.
+// Stacks defined as plain values are left as they are.
 const patchStack = (error: object, trace: string) => {
 	if (!isStackAccessorLazy()) {
 		return;
 	}
 
-	const descriptor = Object.getOwnPropertyDescriptor(error, 'stack');
-	if (!descriptor?.configurable) {
+	const isWrapped = stackTraces.has(error);
+	stackTraces.set(error, trace);
+	if (isWrapped) {
 		return;
 	}
 
-	const { get, set } = descriptor;
-	if (get) {
-		if (stackGetters.has(get)) {
-			return;
-		}
-
-		const patchedGet = () => {
-			const stack: unknown = get.call(error);
-			return typeof stack === 'string' ? insertTrace(stack, trace) : stack;
-		};
-		stackGetters.add(patchedGet);
-		Object.defineProperty(error, 'stack', {
-			configurable: true,
-			enumerable: descriptor.enumerable,
-			get: patchedGet,
-			set: set && ((value: unknown) => set.call(error, value)),
-		});
-	} else if (typeof descriptor.value === 'string') {
-		Object.defineProperty(error, 'stack', {
-			...descriptor,
-			value: insertTrace(descriptor.value, trace),
-		});
+	const descriptor = Object.getOwnPropertyDescriptor(error, 'stack');
+	const get = descriptor?.get;
+	if (!get || !descriptor.configurable) {
+		stackTraces.delete(error);
+		return;
 	}
+
+	const { set } = descriptor;
+	Object.defineProperty(error, 'stack', {
+		configurable: true,
+		enumerable: descriptor.enumerable,
+		get: () => {
+			const stack: unknown = get.call(error);
+			const latestTrace = stackTraces.get(error);
+			return typeof stack === 'string' && latestTrace
+				? insertTrace(stack, latestTrace)
+				: stack;
+		},
+		set: set && ((value: unknown) => set.call(error, value)),
+	});
 };
 
 /**
  * Patches an error's message with its import trace.
- * Reads the `importTrace` property and appends a formatted trace to the message
- * and to the stack.
+ * Reads the `importTrace` property and appends a formatted trace to the message.
+ *
+ * On Node.js 22 and newer, it also adds the trace to `error.stack`, which
+ * `console.error()` and `util.inspect()` print. On Node.js 20, a stack that was
+ * already formatted keeps lacking the trace.
  */
-export const patchErrorWithTrace = (error: unknown): void => {
+export const patchErrorWithTrace = (error: unknown): void => attempt(() => {
 	if (
 		typeof error !== 'object'
 		|| error === null
@@ -149,7 +164,7 @@ export const patchErrorWithTrace = (error: unknown): void => {
 	}
 
 	const trace = formatTrace(error.importTrace);
-	try {
+	attempt(() => {
 		if (
 			'message' in error
 			&& typeof error.message === 'string'
@@ -157,21 +172,15 @@ export const patchErrorWithTrace = (error: unknown): void => {
 		) {
 			error.message += trace;
 		}
-		patchStack(error, trace);
-	} catch {
-		// The error object refused the change, such as a frozen error or a
-		// Proxy. The trace is best-effort; the original error must propagate.
-	}
-};
+	});
+	attempt(() => patchStack(error, trace));
+});
 
-// Attach a trace to an error from Rollup or Vite. The error object may refuse
-// new properties, and the original error must still reach the caller.
+// Attach a trace to an error from Rollup or Vite
 const setImportTrace = (error: object, trace: string[]) => {
-	try {
+	attempt(() => {
 		(error as RollupErrorWithTrace).importTrace = trace;
-	} catch {
-		return;
-	}
+	});
 	patchErrorWithTrace(error);
 };
 
