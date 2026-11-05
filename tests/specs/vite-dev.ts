@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'manten';
 import type { PluginContext } from 'rollup';
-import { createFixture } from '../utils/fixture.ts';
+import { createFixture } from 'fs-fixture';
 import { formatTrace, expectNoTrace } from '../utils/trace.ts';
 import { viteServe } from '../utils/vite.ts';
 import { importTrace } from '../../src/index.ts';

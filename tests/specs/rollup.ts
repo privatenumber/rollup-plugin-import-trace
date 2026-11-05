@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'manten';
 import { rollup, type Plugin } from 'rollup';
 import nodeResolve from '@rollup/plugin-node-resolve';
-import { createFixture } from '../utils/fixture.ts';
+import { createFixture } from 'fs-fixture';
 import { getBuildError, expectTrace, expectNoTrace } from '../utils/trace.ts';
 import { importTrace } from '../../src/index.ts';
 
