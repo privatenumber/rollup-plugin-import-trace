@@ -168,7 +168,7 @@ describe('Rollup', () => {
 					plugins: [
 						{
 							name: 'resolve-to-missing-file',
-							resolveId(source) {
+							resolveId: (source) => {
 								if (source.endsWith('missing.js')) {
 									return missingFile;
 								}
@@ -220,7 +220,7 @@ describe('Rollup', () => {
 						importTrace(),
 						{
 							name: 'throwing-resolver',
-							resolveId(source) {
+							resolveId: (source) => {
 								if (source === '@scope/pkg/deep/module.js') {
 									throw Object.assign(
 										new Error(`ENOENT: open '${failingPath}'`),
@@ -268,6 +268,7 @@ describe('Rollup', () => {
 						{
 							name: 'test-output-error',
 							renderChunk() {
+								// eslint-disable-next-line unicorn/no-this-outside-of-class -- Rollup passes the plugin context as `this` (https://github.com/pvtnbr/lintroll/issues/48)
 								this.error({
 									message: `Exported variable "x" is not defined in "${fixture.getPath('b.js')}".`,
 									exporter: fixture.getPath('b.js'),

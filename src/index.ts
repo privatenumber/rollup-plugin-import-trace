@@ -1,4 +1,4 @@
-import type { Plugin, RollupError } from 'rollup';
+import type { Plugin, PluginContext, RollupError } from 'rollup';
 
 /**
  * Rollup error with import trace property
@@ -41,15 +41,10 @@ type RollupVitePlugin = Plugin & {
 	configureServer?: (server: ViteDevServer) => (() => void) | void;
 };
 
-type ModuleInfo = {
-	importedIds: readonly string[];
-	dynamicallyImportedIds: readonly string[];
-};
-
-type GetModuleInfo = (id: string) => ModuleInfo | null;
+type ResolveRecord = [source: string, importer: string];
 
 // Matches indentation of error stack traces
-const indent = '    ';
+const indent = ' '.repeat(4);
 const traceHeader = '\n\nImport trace:\n';
 
 const formatTrace = (trace: string[]) => `${traceHeader}${trace
@@ -92,13 +87,10 @@ const getErrorFile = (
 // Build importer map on-demand from Rollup's module graph.
 // importedIds is populated after resolveId completes for each import,
 // so this data is available even when moduleParsed never fired.
-const buildImporterMap = (
-	getModuleIds: () => IterableIterator<string>,
-	getModuleInfo: GetModuleInfo,
-) => {
+const buildImporterMap = (context: PluginContext) => {
 	const importerMap = new Map<string, string>();
-	for (const id of getModuleIds()) {
-		const info = getModuleInfo(id);
+	for (const id of context.getModuleIds()) {
+		const info = context.getModuleInfo(id);
 		if (info) {
 			const normalizedId = normalizePath(id);
 			for (const importedId of info.importedIds) {
@@ -162,17 +154,13 @@ const getSubpath = (source: string): string | undefined => {
 const replayResolveRecords = async (
 	moduleId: string,
 	importerMap: Map<string, string>,
-	resolveRecords: Array<[source: string, importer: string]>,
-	resolve: (
-		source: string,
-		importer: string,
-		options: { skipSelf: boolean },
-	) => Promise<{ id: string } | null>,
+	resolveRecords: ResolveRecord[],
+	context: PluginContext,
 ) => {
 	for (const [source, importer] of resolveRecords) {
 		const normalizedImporter = normalizePath(importer);
 		try {
-			const resolved = await resolve(source, importer, { skipSelf: true });
+			const resolved = await context.resolve(source, importer, { skipSelf: true });
 			if (resolved) {
 				const normalizedId = normalizePath(resolved.id);
 				if (!importerMap.has(normalizedId)) {
@@ -192,6 +180,39 @@ const replayResolveRecords = async (
 		if (importerMap.has(moduleId)) {
 			break;
 		}
+	}
+};
+
+// Attach the import trace of the module that caused the error.
+// resolveRecords is only passed in the build phase, where Rollup can
+// drop import edges; by the output phase the module graph is complete.
+const attachImportTrace = async (
+	context: PluginContext,
+	error: RollupError & { path?: string },
+	resolveRecords?: ResolveRecord[],
+) => {
+	const moduleId = getErrorFile(error);
+	if (!moduleId) {
+		return;
+	}
+
+	const importerMap = buildImporterMap(context);
+	let trace = getTrace(moduleId, importerMap);
+
+	if (trace.length <= 1 && resolveRecords) {
+		// Graph walk failed — the error module has no recorded importer.
+		// This only happens when a plugin's resolveId threw (e.g.
+		// commonjs-resolver hitting ENOENT), which prevents Rollup
+		// from recording the import edge. Standard "not found" errors
+		// don't reach here: they either resolve normally or produce
+		// UNRESOLVED_IMPORT warnings (not build errors).
+		await replayResolveRecords(moduleId, importerMap, resolveRecords, context);
+		trace = getTrace(moduleId, importerMap);
+	}
+
+	if (trace.length > 1) {
+		(error as RollupErrorWithTrace).importTrace = trace;
+		patchErrorWithTrace(error);
 	}
 };
 
@@ -226,7 +247,7 @@ export const importTrace = (): RollupVitePlugin => {
 	// hasn't recorded when resolution fails mid-chain.
 	// Replayed sequentially in buildEnd (only on error) with early exit.
 	// Lightweight: two string references per import, cleared each build
-	const resolveRecords: Array<[source: string, importer: string]> = [];
+	const resolveRecords: ResolveRecord[] = [];
 
 	// Build trace using Vite's moduleGraph
 	const getViteTrace = (
@@ -250,22 +271,20 @@ export const importTrace = (): RollupVitePlugin => {
 		name: 'import-trace',
 
 		// Vite dev: return function to register post-middleware
-		configureServer(server) {
-			return () => {
-				// 4-param signature = error middleware (only called when next(error) is invoked)
-				server.middlewares.use((error, _request, _response, next) => {
-					const file = getErrorFile(error);
-					if (file) {
-						const module_ = server.moduleGraph.getModuleById(file);
-						const trace = getViteTrace(module_);
-						if (trace.length > 1) {
-							(error as RollupErrorWithTrace).importTrace = trace;
-							patchErrorWithTrace(error);
-						}
+		configureServer: server => () => {
+			// 4-param signature = error middleware (only called when next(error) is invoked)
+			server.middlewares.use((error, _request, _response, next) => {
+				const file = getErrorFile(error);
+				if (file) {
+					const module_ = server.moduleGraph.getModuleById(file);
+					const trace = getViteTrace(module_);
+					if (trace.length > 1) {
+						(error as RollupErrorWithTrace).importTrace = trace;
+						patchErrorWithTrace(error);
 					}
-					next(error);
-				});
-			};
+				}
+				next(error);
+			});
 		},
 
 		buildStart: () => {
@@ -274,7 +293,7 @@ export const importTrace = (): RollupVitePlugin => {
 
 		// Capture every resolution attempt so we can recover
 		// relationships that Rollup drops when resolveId fails mid-chain
-		resolveId(source, importer) {
+		resolveId: (source, importer) => {
 			if (importer) {
 				resolveRecords.push([source, importer]);
 			}
@@ -282,67 +301,19 @@ export const importTrace = (): RollupVitePlugin => {
 		},
 
 		async buildEnd(error) {
-			if (!error) {
-				return;
-			}
-
-			const moduleId = getErrorFile(error);
-			if (!moduleId) {
-				return;
-			}
-
-			const importerMap = buildImporterMap(
-				() => this.getModuleIds(),
-				id => this.getModuleInfo(id),
-			);
-
-			let trace = getTrace(moduleId, importerMap);
-
-			if (trace.length <= 1) {
-				// Graph walk failed — the error module has no recorded importer.
-				// This only happens when a plugin's resolveId threw (e.g.
-				// commonjs-resolver hitting ENOENT), which prevents Rollup
-				// from recording the import edge. Standard "not found" errors
-				// don't reach here: they either resolve normally or produce
-				// UNRESOLVED_IMPORT warnings (not build errors).
-				await replayResolveRecords(
-					moduleId,
-					importerMap,
-					resolveRecords,
-					this.resolve.bind(this),
-				);
-				trace = getTrace(moduleId, importerMap);
-			}
-
-			if (trace.length > 1) {
-				(error as RollupErrorWithTrace).importTrace = trace;
-				patchErrorWithTrace(error);
+			if (error) {
+				// eslint-disable-next-line unicorn/no-this-outside-of-class -- Rollup passes the plugin context as `this` (https://github.com/pvtnbr/lintroll/issues/48)
+				await attachImportTrace(this, error, resolveRecords);
 			}
 		},
 
 		// Handle errors during output generation (renderChunk, generateBundle).
 		// buildEnd only receives build-phase errors; output-phase errors
 		// (e.g. MISSING_EXPORT from chunk.generateExports) need renderError.
-		// No replay needed — module graph is fully built by the output phase
-		renderError(error) {
-			if (!error) {
-				return;
-			}
-
-			const moduleId = getErrorFile(error as RollupError & { path?: string });
-			if (!moduleId) {
-				return;
-			}
-
-			const importerMap = buildImporterMap(
-				() => this.getModuleIds(),
-				id => this.getModuleInfo(id),
-			);
-
-			const trace = getTrace(moduleId, importerMap);
-			if (trace.length > 1) {
-				(error as RollupErrorWithTrace).importTrace = trace;
-				patchErrorWithTrace(error);
+		async renderError(error) {
+			if (error) {
+				// eslint-disable-next-line unicorn/no-this-outside-of-class -- Rollup passes the plugin context as `this` (https://github.com/pvtnbr/lintroll/issues/48)
+				await attachImportTrace(this, error);
 			}
 		},
 	};

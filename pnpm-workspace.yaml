@@ -2,6 +2,10 @@ allowBuilds:
   esbuild: false
   unrs-resolver: false
 permissions:
+  fs-fixture:
+    skills: true
+  lintroll:
+    skills: true
   manten:
     skills: true
 skills:
