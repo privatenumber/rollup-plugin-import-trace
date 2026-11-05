@@ -2,6 +2,8 @@ allowBuilds:
   esbuild: false
   unrs-resolver: false
 permissions:
+  clean-pkg-json:
+    skills: true
   fs-fixture:
     skills: true
   lintroll:
