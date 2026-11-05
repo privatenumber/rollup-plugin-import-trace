@@ -68,8 +68,7 @@ describe('Vite dev', () => {
 	 * so resolveId records must not accumulate for the server's lifetime.
 	 *
 	 * Vite only calls buildEnd when the server closes, so this test calls it
-	 * directly. Its context fails every resolution, which makes a retained
-	 * record attach a trace through the subpath fallback.
+	 * directly. Replay calls context.resolve() once per retained record.
 	 */
 	test('resolveId records are not retained', async ({ signal }) => {
 		await using fixture = await createFixture({
@@ -84,14 +83,19 @@ describe('Vite dev', () => {
 		expect(response.status).toBe(200);
 
 		const error = Object.assign(new Error('ENOENT'), { path: fixture.getPath('a.js') });
+		let resolveCalls = 0;
 		const context = {
 			getModuleIds: () => [].values(),
 			getModuleInfo: () => null,
-			resolve: () => Promise.reject(new Error('Unresolvable')),
+			resolve: () => {
+				resolveCalls += 1;
+				return Promise.reject(new Error('Unresolvable'));
+			},
 		} as unknown as PluginContext;
 		const buildEnd = plugin.buildEnd as (this: PluginContext, error: Error) => Promise<void>;
 		await buildEnd.call(context, error);
 
+		expect(resolveCalls).toBe(0);
 		expectNoTrace(error);
 	}, timeout);
 });
