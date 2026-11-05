@@ -1,3 +1,4 @@
+import { inspect } from 'node:util';
 import { describe, test, expect } from 'manten';
 import { patchErrorWithTrace } from '../../src/index.ts';
 
@@ -8,6 +9,8 @@ const createError = (importTrace?: unknown) => {
 	Error.captureStackTrace(error, createError);
 	return error;
 };
+
+const trace = '\n\nImport trace:\n    /a.js\n    ↳ /b.js\n';
 
 describe('patchErrorWithTrace', () => {
 	test('formats a single-entry trace', () => {
@@ -34,59 +37,66 @@ describe('patchErrorWithTrace', () => {
 		].join('\n'));
 	});
 
-	// V8 formats error.stack on first access, so a stack read before patching
-	// keeps the old message. console.error() and util.inspect() print the stack.
-	test('updates a stack that was already formatted', () => {
+	// console.error() and util.inspect() print the stack. V8 formats it once,
+	// with the message at that time, so the header must be rewritten too.
+	test('rewrites the stack header to the patched message', () => {
 		const error = createError(['/a.js', '/b.js']);
 		const originalStack = error.stack!;
 
 		patchErrorWithTrace(error);
 
-		expect(error.stack).toBe(originalStack.replace('Original message', error.message));
+		const frames = originalStack.slice('Error: Original message'.length);
+		expect(error.stack).toBe(`Error: Original message${trace}${frames}`);
+		expect(inspect(error)).toContain(trace);
 	});
 
-	// Reading the stack would make V8 format it with the message at that time
-	test('leaves an unformatted stack to reflect later message changes', () => {
-		const error = createError(['/a.js', '/b.js']);
+	// Reading the stack after the message changed would format it with the
+	// patched message, so the header would already contain the trace
+	test('adds the trace once to a stack that was not formatted yet', () => {
+		const error = Object.assign(new Error('Original message'), { importTrace: ['/a.js', '/b.js'] });
 
 		patchErrorWithTrace(error);
-		error.message = `[plugin] ${error.message}`;
 
-		expect(error.stack).toMatch(/^Error: \[plugin\] Original message\n\nImport trace:\n/);
+		expect(error.stack!.split('Import trace:')).toHaveLength(2);
+		expect(error.stack).toMatch(/^Error: Original message\n\nImport trace:\n/);
 	});
 
-	test('adds the trace to a stack whose message changed after formatting', () => {
-		for (const message of ['Original message', '']) {
-			const error = createError(['/a.js', '/b.js']);
-			const originalStack = error.stack!;
-			error.message = message === '' ? '' : 'Changed message';
-
-			patchErrorWithTrace(error);
-
-			const framesIndex = originalStack.indexOf('\n    at ');
-			const header = originalStack.slice(0, framesIndex);
-			const frames = originalStack.slice(framesIndex);
-			expect(error.stack).toBe(`${header}\n\nImport trace:\n    /a.js\n    ↳ /b.js\n${frames}`);
-		}
-	});
-
-	test('inserts the trace after the message, not after a matching error name', () => {
+	test('matches the header by name, not an earlier occurrence of the message', () => {
 		const error = Object.assign(new Error('Error'), { importTrace: ['/a.js', '/b.js'] });
-		expect(error.stack).toMatch(/^Error: Error\n/);
 
 		patchErrorWithTrace(error);
 
 		expect(error.stack).toMatch(/^Error: Error\n\nImport trace:\n/);
 	});
 
-	test('repairs the stack when the message already has the trace', () => {
+	// A stack whose header is not the current message was changed by someone
+	// else, so there is no safe place to insert the trace
+	test('leaves a stack whose header does not match the message', () => {
+		for (const stack of [
+			'Error: Other message\n    at f (file.js:1:1)',
+			'Error: Original message plus more\n    at f (file.js:1:1)',
+		]) {
+			const error = createError(['/a.js', '/b.js']);
+			error.stack = stack;
+
+			patchErrorWithTrace(error);
+
+			expect(error.message).toContain('Import trace:');
+			expect(error.stack).toBe(stack);
+		}
+	});
+
+	test('patches the stack when the message is read-only', () => {
 		const error = createError(['/a.js', '/b.js']);
-		expect(error.stack).toContain('Original message');
-		error.message += '\n\nImport trace:\n    /a.js\n    ↳ /b.js\n';
+		Object.defineProperty(error, 'message', {
+			value: 'Original message',
+			writable: false,
+		});
 
 		patchErrorWithTrace(error);
 
-		expect(error.stack).toContain('\n\nImport trace:\n    /a.js\n    ↳ /b.js\n');
+		expect(error.message).toBe('Original message');
+		expect(error.stack).toMatch(/^Error: Original message\n\nImport trace:\n/);
 	});
 
 	test('keeps an error whose stack cannot be changed', () => {
@@ -102,62 +112,34 @@ describe('patchErrorWithTrace', () => {
 		expect(error.stack).toBe('Error: Original message\n    at f (file.js:1:1)');
 	});
 
-	// Another plugin can assign a new stack after this plugin patched it
-	test('keeps the trace when the stack is replaced', () => {
-		const error = createError(['/a.js', '/b.js']);
-		patchErrorWithTrace(error);
-
-		error.stack = 'Error: Replaced\n    at g (file.js:1:1)';
-
-		expect(error.stack).toBe('Error: Replaced\n\nImport trace:\n    /a.js\n    ↳ /b.js\n\n    at g (file.js:1:1)');
-	});
-
-	// A message can contain a nested stack, such as a compiler's own error
-	test('inserts the trace before the trailing frames only', () => {
-		const error = createError(['/a.js']);
-		error.stack = 'Error: compiler failure\n    at nested (inner.js:1:1)\ndetails\n    at f (file.js:1:1)';
-
-		patchErrorWithTrace(error);
-
-		expect(error.stack).toBe('Error: compiler failure\n    at nested (inner.js:1:1)\ndetails\n\nImport trace:\n    /a.js\n\n    at f (file.js:1:1)');
-	});
-
-	test('shows the latest trace for a reused error', () => {
-		const error = createError(['/a.js']);
-		expect(error.stack).toContain('Original message');
-		patchErrorWithTrace(error);
-
-		error.message = 'Original message';
-		error.importTrace = ['/b.js', '/c.js'];
-		patchErrorWithTrace(error);
-
-		expect(error.stack).toContain('\n\nImport trace:\n    /b.js\n    ↳ /c.js\n');
-		expect(error.stack).not.toContain('/a.js');
-	});
-
-	test('patches the stack when the message is read-only', () => {
-		const error = createError(['/a.js']);
-		expect(error.stack).toContain('Original message');
-		Object.defineProperty(error, 'message', {
-			value: 'Original message',
-			writable: false,
+	// A Proxy that forwards to a native error must keep its stack frames
+	test('keeps the stack of a proxied error', () => {
+		const error = new Proxy(createError(['/a.js', '/b.js']), {
+			get: (target, key) => Reflect.get(target, key, target),
 		});
 
 		patchErrorWithTrace(error);
 
-		expect(error.message).toBe('Original message');
-		expect(error.stack).toContain('\n\nImport trace:\n    /a.js\n');
+		expect(error.message).toContain('Import trace:');
+		expect(error.stack).toMatch(/^Error: Original message\n[\s\S]*\n {4}at /);
 	});
 
-	test('keeps an error whose stack redefinition is refused', () => {
+	test('keeps an error whose stack assignment is refused', () => {
 		const error = new Proxy(createError(['/a.js', '/b.js']), {
-			defineProperty: (target, key, descriptor) => (
-				key !== 'stack' && Reflect.defineProperty(target, key, descriptor)
-			),
+			set: (target, key, value) => key !== 'stack' && Reflect.set(target, key, value),
 		});
 
 		expect(() => patchErrorWithTrace(error)).not.toThrow();
 		expect(error.message).toContain('Import trace:');
+	});
+
+	// V8's stack setter still works on a frozen error, so only the message stays
+	test('keeps a frozen error', () => {
+		const error = Object.freeze(createError(['/a.js', '/b.js']));
+
+		expect(() => patchErrorWithTrace(error)).not.toThrow();
+		expect(error.message).toBe('Original message');
+		expect(error.stack).toMatch(/^Error: Original message\n/);
 	});
 
 	test('keeps an error whose importTrace cannot be read', () => {
@@ -173,8 +155,6 @@ describe('patchErrorWithTrace', () => {
 	test('is idempotent', () => {
 		const error = createError(['/a.js', '/b.js']);
 
-		// Format the stack before patching
-		expect(error.stack).toContain('Original message');
 		patchErrorWithTrace(error);
 		const { message, stack } = error;
 		patchErrorWithTrace(error);

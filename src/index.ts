@@ -55,31 +55,6 @@ const formatTrace = (trace: string[]) => `${traceHeader}${trace
 	})
 	.join('\n')}\n`;
 
-const framePattern = /^\s+at /;
-
-// Insert the trace between the stack header (name and message) and the frames
-// that end the stack. A message can itself contain frame-like lines, such as
-// a nested stack, so only the trailing frames count.
-const insertTrace = (stack: string, trace: string) => {
-	if (stack.includes(traceHeader)) {
-		return stack;
-	}
-
-	const lines = stack.split('\n');
-	let framesStart = lines.length;
-	while (framesStart > 1 && framePattern.test(lines[framesStart - 1]!)) {
-		framesStart -= 1;
-	}
-
-	if (framesStart === lines.length) {
-		return stack + trace;
-	}
-
-	const header = lines.slice(0, framesStart).join('\n');
-	const frames = lines.slice(framesStart).join('\n');
-	return `${header}${trace}\n${frames}`;
-};
-
 // The trace is best-effort. An error object can refuse any read or write,
 // such as a frozen error or a Proxy, and the original error must still reach
 // the caller.
@@ -91,96 +66,71 @@ const attempt = (action: () => void) => {
 	}
 };
 
-// Node.js 22 and newer expose error.stack as an accessor that formats the
-// stack on first read, so its descriptor can be inspected without formatting
-// it. Node.js 20 exposes a data property, and reading its descriptor formats
-// the stack, which would hide later message changes. Detected once with a
-// throwaway error.
-let hasLazyStackAccessor: boolean | undefined;
-const isStackAccessorLazy = () => {
-	hasLazyStackAccessor ??= typeof Object.getOwnPropertyDescriptor(new Error('probe'), 'stack')?.get === 'function';
-	return hasLazyStackAccessor;
+// console.error() and util.inspect() print error.stack. V8 formats the stack
+// once, with the message at that time, and Rollup copies the stack of the
+// errors it wraps, so changing the message alone does not change the stack.
+// Like Rollup (tweakStackMessage) and Vite (enhanceRollupError), the stack
+// header is rewritten in the same step as the message. The stack must be read
+// before the message changes, so an unformatted stack is formatted with the
+// original message. A header that is not the original message was changed by
+// someone else, so it is left as is.
+const patchStack = (
+	error: object,
+	originalStack: string,
+	originalMessage: string,
+	patchedMessage: string,
+) => {
+	const name = 'name' in error && typeof error.name === 'string' ? error.name : 'Error';
+	const header = `${name}: ${originalMessage}`;
+	const frames = originalStack.slice(header.length);
+	if (originalStack.startsWith(header) && (frames === '' || frames.startsWith('\n'))) {
+		(error as { stack: string }).stack = `${name}: ${patchedMessage}${frames}`;
+	}
 };
 
-// The latest trace for each error whose stack accessor is wrapped, so a
-// reused error shows its current trace
-const stackTraces = new WeakMap<object, string>();
-
-// console.error() and util.inspect() print error.stack when there is one.
-// V8 formats the stack on first access with the message at that time, so a
-// stack read before the message was patched lacks the trace. Reading it here
-// would format it early and hide later message changes, so only a native
-// stack accessor is patched: it is wrapped to insert the trace on read.
-// Stacks defined as plain values are left as they are.
-const patchStack = (error: object, trace: string) => {
-	if (!isStackAccessorLazy()) {
-		return;
-	}
-
-	const isWrapped = stackTraces.has(error);
-	stackTraces.set(error, trace);
-	if (isWrapped) {
-		return;
-	}
-
-	const descriptor = Object.getOwnPropertyDescriptor(error, 'stack');
-	const get = descriptor?.get;
-	if (!get || !descriptor.configurable) {
-		stackTraces.delete(error);
-		return;
-	}
-
-	const { set } = descriptor;
-	Object.defineProperty(error, 'stack', {
-		configurable: true,
-		enumerable: descriptor.enumerable,
-		get: () => {
-			const stack: unknown = get.call(error);
-			const latestTrace = stackTraces.get(error);
-			return typeof stack === 'string' && latestTrace
-				? insertTrace(stack, latestTrace)
-				: stack;
-		},
-		set: set && ((value: unknown) => set.call(error, value)),
-	});
-};
+const readStack = (error: object) => (
+	'stack' in error && typeof error.stack === 'string' ? error.stack : undefined
+);
 
 /**
  * Patches an error's message with its import trace.
  * Reads the `importTrace` property and appends a formatted trace to the message.
- *
- * On Node.js 22 and newer, it also adds the trace to `error.stack`, which
- * `console.error()` and `util.inspect()` print. On Node.js 20, a stack that was
- * already formatted keeps lacking the trace.
+ * It also rewrites the stack header, which `console.error()` and
+ * `util.inspect()` print, when that header is the original message.
  */
 export const patchErrorWithTrace = (error: unknown): void => attempt(() => {
 	if (
 		typeof error !== 'object'
 		|| error === null
+		|| !('message' in error)
+		|| typeof error.message !== 'string'
+		|| !error.message
 		|| !('importTrace' in error)
 		|| !Array.isArray(error.importTrace)
+		|| error.message.includes(traceHeader)
 	) {
 		return;
 	}
 
-	const trace = formatTrace(error.importTrace);
+	const originalMessage = error.message;
+	const patchedMessage = originalMessage + formatTrace(error.importTrace);
+	const originalStack = readStack(error);
 	attempt(() => {
-		if (
-			'message' in error
-			&& typeof error.message === 'string'
-			&& !error.message.includes(traceHeader)
-		) {
-			error.message += trace;
-		}
+		error.message = patchedMessage;
 	});
-	attempt(() => patchStack(error, trace));
+	if (originalStack !== undefined) {
+		attempt(() => patchStack(error, originalStack, originalMessage, patchedMessage));
+	}
 });
 
-// Attach a trace to an error from Rollup or Vite
+// Attach a trace to an error from Rollup or Vite. If the error refuses the
+// new importTrace, it is left as it is rather than formatting an older one.
 const setImportTrace = (error: object, trace: string[]) => {
-	attempt(() => {
+	try {
 		(error as RollupErrorWithTrace).importTrace = trace;
-	});
+	} catch {
+		return;
+	}
 	patchErrorWithTrace(error);
 };
 
