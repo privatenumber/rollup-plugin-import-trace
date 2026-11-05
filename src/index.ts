@@ -55,55 +55,82 @@ const formatTrace = (trace: string[]) => `${traceHeader}${trace
 	})
 	.join('\n')}\n`;
 
-const framesPattern = /\n\s+at /;
+const framePattern = /^\s+at /;
 
-// Insert the trace between the stack header (name and message) and its frames
+// Insert the trace between the stack header (name and message) and the frames
+// that end the stack. A message can itself contain frame-like lines, such as
+// a nested stack, so only the trailing frames count.
 const insertTrace = (stack: string, trace: string) => {
 	if (stack.includes(traceHeader)) {
 		return stack;
 	}
 
-	const framesIndex = stack.search(framesPattern);
-	return framesIndex === -1
-		? stack + trace
-		: stack.slice(0, framesIndex) + trace + stack.slice(framesIndex);
+	const lines = stack.split('\n');
+	let framesStart = lines.length;
+	while (framesStart > 1 && framePattern.test(lines[framesStart - 1]!)) {
+		framesStart -= 1;
+	}
+
+	if (framesStart === lines.length) {
+		return stack + trace;
+	}
+
+	const header = lines.slice(0, framesStart).join('\n');
+	const frames = lines.slice(framesStart).join('\n');
+	return `${header}${trace}\n${frames}`;
 };
 
-const patchedStacks = new WeakSet<object>();
+// Node.js 22 and newer expose error.stack as an accessor that formats the
+// stack on first read, so its descriptor can be inspected without formatting
+// it. Node.js 20 exposes a data property, and reading its descriptor formats
+// the stack, which would hide later message changes. Detected once with a
+// throwaway error.
+let hasLazyStackAccessor: boolean | undefined;
+const isStackAccessorLazy = () => {
+	hasLazyStackAccessor ??= typeof Object.getOwnPropertyDescriptor(new Error('probe'), 'stack')?.get === 'function';
+	return hasLazyStackAccessor;
+};
+
+const stackGetters = new WeakSet<() => unknown>();
 
 // console.error() and util.inspect() print error.stack, not error.message.
 // V8 formats the stack on first access with the message at that time, so a
 // stack read before the message was patched lacks the trace. Reading it here
 // would format it early and hide later message changes, so the accessor is
-// wrapped to insert the trace on read. A stack that cannot be redefined or
-// written is left as is, so the original error still propagates.
+// wrapped to insert the trace on read.
 const patchStack = (error: object, trace: string) => {
+	if (!isStackAccessorLazy()) {
+		return;
+	}
+
 	const descriptor = Object.getOwnPropertyDescriptor(error, 'stack');
-	if (!descriptor || patchedStacks.has(error)) {
+	if (!descriptor?.configurable) {
 		return;
 	}
 
 	const { get, set } = descriptor;
-	if (get && descriptor.configurable) {
+	if (get) {
+		if (stackGetters.has(get)) {
+			return;
+		}
+
+		const patchedGet = () => {
+			const stack: unknown = get.call(error);
+			return typeof stack === 'string' ? insertTrace(stack, trace) : stack;
+		};
+		stackGetters.add(patchedGet);
 		Object.defineProperty(error, 'stack', {
 			configurable: true,
 			enumerable: descriptor.enumerable,
-			get: () => {
-				const stack: unknown = get.call(error);
-				return typeof stack === 'string' ? insertTrace(stack, trace) : stack;
-			},
+			get: patchedGet,
 			set: set && ((value: unknown) => set.call(error, value)),
 		});
-	} else if (descriptor.writable && typeof descriptor.value === 'string') {
+	} else if (typeof descriptor.value === 'string') {
 		Object.defineProperty(error, 'stack', {
 			...descriptor,
 			value: insertTrace(descriptor.value, trace),
 		});
-	} else {
-		return;
 	}
-
-	patchedStacks.add(error);
 };
 
 /**
@@ -122,14 +149,30 @@ export const patchErrorWithTrace = (error: unknown): void => {
 	}
 
 	const trace = formatTrace(error.importTrace);
-	if (
-		'message' in error
-		&& typeof error.message === 'string'
-		&& !error.message.includes(traceHeader)
-	) {
-		error.message += trace;
+	try {
+		if (
+			'message' in error
+			&& typeof error.message === 'string'
+			&& !error.message.includes(traceHeader)
+		) {
+			error.message += trace;
+		}
+		patchStack(error, trace);
+	} catch {
+		// The error object refused the change, such as a frozen error or a
+		// Proxy. The trace is best-effort; the original error must propagate.
 	}
-	patchStack(error, trace);
+};
+
+// Attach a trace to an error from Rollup or Vite. The error object may refuse
+// new properties, and the original error must still reach the caller.
+const setImportTrace = (error: object, trace: string[]) => {
+	try {
+		(error as RollupErrorWithTrace).importTrace = trace;
+	} catch {
+		return;
+	}
+	patchErrorWithTrace(error);
 };
 
 // Rollup uses OS-native path separators for module IDs on Windows,
@@ -271,8 +314,7 @@ const attachImportTrace = async (
 	}
 
 	if (trace.length > 1) {
-		(error as RollupErrorWithTrace).importTrace = trace;
-		patchErrorWithTrace(error);
+		setImportTrace(error, trace);
 	}
 };
 
@@ -356,8 +398,7 @@ export const importTrace = (): RollupVitePlugin => {
 						const module_ = server.moduleGraph.getModuleById(file);
 						const trace = getViteTrace(module_);
 						if (trace.length > 1) {
-							(error as RollupErrorWithTrace).importTrace = trace;
-							patchErrorWithTrace(error);
+							setImportTrace(error, trace);
 						}
 					}
 					next(error);

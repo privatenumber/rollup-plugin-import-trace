@@ -102,6 +102,55 @@ describe('patchErrorWithTrace', () => {
 		expect(error.stack).toBe('Error: Original message\n    at f (file.js:1:1)');
 	});
 
+	test('patches a read-only stack that can be redefined', () => {
+		const error = createError(['/a.js', '/b.js']);
+		Object.defineProperty(error, 'stack', {
+			value: 'Error: Original message\n    at f (file.js:1:1)',
+			configurable: true,
+		});
+
+		patchErrorWithTrace(error);
+
+		expect(error.stack).toBe('Error: Original message\n\nImport trace:\n    /a.js\n    ↳ /b.js\n\n    at f (file.js:1:1)');
+	});
+
+	test('patches a stack again after it was replaced', () => {
+		const error = createError(['/a.js', '/b.js']);
+		patchErrorWithTrace(error);
+		Object.defineProperty(error, 'stack', {
+			value: 'Error: Replaced\n    at g (file.js:1:1)',
+			writable: true,
+			configurable: true,
+		});
+
+		patchErrorWithTrace(error);
+
+		expect(error.stack).toBe('Error: Replaced\n\nImport trace:\n    /a.js\n    ↳ /b.js\n\n    at g (file.js:1:1)');
+	});
+
+	// A message can contain a nested stack, such as a compiler's own error
+	test('inserts the trace before the trailing frames only', () => {
+		const error = createError(['/a.js']);
+		Object.defineProperty(error, 'stack', {
+			value: 'Error: compiler failure\n    at nested (inner.js:1:1)\ndetails\n    at f (file.js:1:1)',
+			writable: true,
+			configurable: true,
+		});
+
+		patchErrorWithTrace(error);
+
+		expect(error.stack).toBe('Error: compiler failure\n    at nested (inner.js:1:1)\ndetails\n\nImport trace:\n    /a.js\n\n    at f (file.js:1:1)');
+	});
+
+	test('keeps an error whose stack redefinition is refused', () => {
+		const error = new Proxy(createError(['/a.js', '/b.js']), {
+			defineProperty: () => false,
+		});
+
+		expect(() => patchErrorWithTrace(error)).not.toThrow();
+		expect(error.message).toBe('Original message');
+	});
+
 	test('is idempotent', () => {
 		const error = createError(['/a.js', '/b.js']);
 
