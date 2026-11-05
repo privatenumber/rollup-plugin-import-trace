@@ -83,6 +83,12 @@ describe('Package', () => {
 				import { importTrace, type RollupErrorWithTrace } from 'rollup-plugin-import-trace';
 				importTrace();
 				export type T = RollupErrorWithTrace;
+
+				// ESM declarations have no default export. CommonJS declarations
+				// would allow one, so this fails if import resolves the wrong file.
+				// @ts-expect-error -- no default export
+				import importTraceDefault from 'rollup-plugin-import-trace';
+				export { importTraceDefault };
 			`,
 			'cjs.cts': `
 				import { importTrace, type RollupErrorWithTrace } from 'rollup-plugin-import-trace';
