@@ -45,7 +45,7 @@ export default {
 ```
 
 > [!IMPORTANT]
-> List `importTrace()` **first** in the plugins array. Its `resolveId` hook needs to run before other plugins to record import relationships for error recovery.
+> In Rollup, list `importTrace()` **first** in the plugins array. Its `resolveId` hook needs to run before other plugins to record import relationships for error recovery. In Vite, the plugin uses `enforce: 'pre'`, so it runs before Vite's own resolver wherever it is listed. Other plugins with `enforce: 'pre'` run in their listed order, so list `importTrace()` before them.
 
 Works with Rollup and Vite (both dev and build modes).
 

@@ -38,6 +38,7 @@ type ViteErrorMiddleware = (
 ) => void;
 
 type RollupVitePlugin = Plugin & {
+	enforce?: 'pre' | 'post';
 	configureServer?: (server: ViteDevServer) => (() => void) | void;
 };
 
@@ -249,6 +250,13 @@ export const importTrace = (): RollupVitePlugin => {
 	// Lightweight: two string references per import, cleared each build
 	const resolveRecords: ResolveRecord[] = [];
 
+	// A Vite dev server can resolve imports for its whole lifetime without
+	// calling buildStart again, so records would keep growing. Dev errors are
+	// traced from Vite's module graph instead, so nothing replays them.
+	// Vite calls closeBundle when the server closes, which re-enables
+	// recording for a later build that reuses this plugin instance.
+	let isDevServer = false;
+
 	// Build trace using Vite's moduleGraph
 	const getViteTrace = (
 		module_: ViteModule | undefined,
@@ -270,21 +278,32 @@ export const importTrace = (): RollupVitePlugin => {
 	return {
 		name: 'import-trace',
 
+		// Vite runs its own resolver (vite:resolve) before normal plugins, and it
+		// ends the resolveId chain. In builds, commonjs--resolver resolves
+		// imports through that chain and then loads modules that may be
+		// CommonJS, so a syntax error in node_modules can throw from resolveId.
+		// Running first lets resolveId record the import before vite:resolve
+		// claims it. Rollup ignores this.
+		enforce: 'pre',
+
 		// Vite dev: return function to register post-middleware
-		configureServer: server => () => {
-			// 4-param signature = error middleware (only called when next(error) is invoked)
-			server.middlewares.use((error, _request, _response, next) => {
-				const file = getErrorFile(error);
-				if (file) {
-					const module_ = server.moduleGraph.getModuleById(file);
-					const trace = getViteTrace(module_);
-					if (trace.length > 1) {
-						(error as RollupErrorWithTrace).importTrace = trace;
-						patchErrorWithTrace(error);
+		configureServer: (server) => {
+			isDevServer = true;
+			return () => {
+				// 4-param signature = error middleware (only called when next(error) is invoked)
+				server.middlewares.use((error, _request, _response, next) => {
+					const file = getErrorFile(error);
+					if (file) {
+						const module_ = server.moduleGraph.getModuleById(file);
+						const trace = getViteTrace(module_);
+						if (trace.length > 1) {
+							(error as RollupErrorWithTrace).importTrace = trace;
+							patchErrorWithTrace(error);
+						}
 					}
-				}
-				next(error);
-			});
+					next(error);
+				});
+			};
 		},
 
 		buildStart: () => {
@@ -294,10 +313,14 @@ export const importTrace = (): RollupVitePlugin => {
 		// Capture every resolution attempt so we can recover
 		// relationships that Rollup drops when resolveId fails mid-chain
 		resolveId: (source, importer) => {
-			if (importer) {
+			if (importer && !isDevServer) {
 				resolveRecords.push([source, importer]);
 			}
 			return null;
+		},
+
+		closeBundle: () => {
+			isDevServer = false;
 		},
 
 		async buildEnd(error) {
