@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'manten';
+import type { PluginContext } from 'rollup';
 import { createFixture } from '../utils/fixture.ts';
-import { formatTrace } from '../utils/trace.ts';
+import { formatTrace, expectNoTrace } from '../utils/trace.ts';
 import { viteServe } from '../utils/vite.ts';
 import { importTrace } from '../../src/index.ts';
 
@@ -60,5 +61,37 @@ describe('Vite dev', () => {
 		expect(dev.errors).toHaveLength(1);
 		expect(dev.errors[0]).toMatch(/^Internal server error/);
 		expect(dev.errors[0]).not.toContain('Import trace:');
+	}, timeout);
+
+	/**
+	 * Vite calls buildStart once per server but resolveId for every request,
+	 * so resolveId records must not accumulate for the server's lifetime.
+	 *
+	 * Vite only calls buildEnd when the server closes, so this test calls it
+	 * directly. Its context fails every resolution, which makes a retained
+	 * record attach a trace through the subpath fallback.
+	 */
+	test('resolveId records are not retained', async ({ signal }) => {
+		await using fixture = await createFixture({
+			'index.js': 'import { value } from "./a.js"; console.log(value);',
+			'a.js': 'export const value = "hello";',
+		});
+		const plugin = importTrace();
+		await using dev = await viteServe(fixture.path, { plugins: [plugin] });
+
+		// Vite resolves ./a.js from index.js through the plugin's resolveId
+		const response = await fetch(`${dev.url}/index.js`, { signal });
+		expect(response.status).toBe(200);
+
+		const error = Object.assign(new Error('ENOENT'), { path: fixture.getPath('a.js') });
+		const context = {
+			getModuleIds: () => [].values(),
+			getModuleInfo: () => null,
+			resolve: () => Promise.reject(new Error('Unresolvable')),
+		} as unknown as PluginContext;
+		const buildEnd = plugin.buildEnd as (this: PluginContext, error: Error) => Promise<void>;
+		await buildEnd.call(context, error);
+
+		expectNoTrace(error);
 	}, timeout);
 });
