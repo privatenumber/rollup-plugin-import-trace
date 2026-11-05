@@ -37,8 +37,7 @@
 		"test": "pnpm build && tsx tests/index.ts",
 		"lint": "lintroll --cache --node .",
 		"type-check": "tsc",
-		"prepack": "pnpm build && clean-pkg-json",
-		"prepare": "skills-npm"
+		"prepack": "pnpm build && clean-pkg-json"
 	},
 	"engines": {
 		"node": ">=20.20.0"
@@ -66,7 +65,6 @@
 		"nano-spawn": "^2.0.0",
 		"pkgroll": "^2.11.2",
 		"rollup": "^4.53.1",
-		"skills-npm": "^1.0.0",
 		"tsx": "^4.20.6",
 		"typescript": "^5.9.3",
 		"vite": "^7.3.1"
