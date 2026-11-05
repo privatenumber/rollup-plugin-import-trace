@@ -1,10 +1,13 @@
 import { describe, test, expect } from 'manten';
 import { patchErrorWithTrace } from '../../src/index.ts';
 
-const createError = (importTrace?: unknown) => Object.assign(
-	new Error('Original message'),
-	{ importTrace },
-);
+const createError = (importTrace?: unknown) => {
+	const error = Object.assign(new Error('Original message'), { importTrace });
+
+	// Start the stack at the test that called this helper
+	Error.captureStackTrace(error, createError);
+	return error;
+};
 
 describe('patchErrorWithTrace', () => {
 	test('formats a single-entry trace', () => {
