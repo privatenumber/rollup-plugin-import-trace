@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { PluginContext } from 'rollup';
 import { normalizePath } from '../utils/normalize-path.ts';
 
@@ -24,6 +25,21 @@ const getSubpath = (source: string): string | undefined => {
 	return firstSlash === -1 ? undefined : source.slice(firstSlash + 1);
 };
 
+// Whether a specifier whose resolution threw refers to moduleId.
+// @rollup/plugin-commonjs also resolves modules by absolute path, which must
+// match exactly. Both path styles are checked, so the result does not depend
+// on the OS the build runs on.
+const matchesModule = (source: string, moduleId: string) => {
+	if (path.posix.isAbsolute(source) || path.win32.isAbsolute(source)) {
+		return normalizePath(source) === moduleId;
+	}
+
+	// Slash-prefixed includes() respects path boundaries while still
+	// tolerating extension mismatches (e.g. "deep/types" vs "deep/types.d.ts")
+	const subpath = getSubpath(source);
+	return subpath !== undefined && moduleId.includes(`/${subpath}`);
+};
+
 /**
  * Replay recorded resolveId calls to recover the importer of `moduleId`.
  * Rollup records no import edge when a plugin's resolveId hook throws (a null
@@ -47,10 +63,7 @@ export const replayResolveRecords = async (
 				}
 			}
 		} catch {
-			// Slash-prefixed includes() respects path boundaries while still
-			// tolerating extension mismatches (e.g. "deep/types" vs "deep/types.d.ts")
-			const subpath = getSubpath(source);
-			if (subpath && moduleId.includes(`/${subpath}`)) {
+			if (matchesModule(source, moduleId)) {
 				importerMap.set(moduleId, normalizedImporter);
 			}
 		}

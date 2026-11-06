@@ -291,6 +291,41 @@ describe('Rollup', () => {
 		}
 	});
 
+	// @rollup/plugin-commonjs resolves modules again by absolute path, which
+	// can be the only record of an edge. A Windows path has no forward slash,
+	// so it must be matched as a path, not as a package subpath. The drive
+	// letter path reproduces this on every OS.
+	test('recovers an edge recorded with an absolute path', async () => {
+		const brokenId = String.raw`C:\project\broken.js`;
+		const files: Record<string, string> = {
+			[String.raw`C:\project\index.js`]: 'export { value } from "./a.js"',
+			[String.raw`C:\project\a.js`]: `export { value } from ${JSON.stringify(brokenId)}`,
+		};
+
+		const error = await getBuildError(() => rollup({
+			input: String.raw`C:\project\index.js`,
+			plugins: [
+				importTrace(),
+				{
+					name: 'virtual-windows-paths',
+					resolveId: (source) => {
+						if (source === brokenId) {
+							throw Object.assign(new Error('ENOENT'), { path: brokenId });
+						}
+						return source.startsWith('./') ? `C:\\project\\${source.slice(2)}` : source;
+					},
+					load: id => files[id],
+				},
+			],
+		}));
+
+		expect(error.importTrace).toStrictEqual([
+			'C:/project/index.js',
+			'C:/project/a.js',
+			'C:/project/broken.js',
+		]);
+	});
+
 	/**
 	 * Some errors fire during output generation (chunk rendering), which
 	 * buildEnd never sees. They may only carry `exporter` or `loc.file`.
