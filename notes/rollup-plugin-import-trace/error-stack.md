@@ -1,6 +1,6 @@
 # Import trace in error.stack
 
-Decision, 2026-11-06: when `patchErrorWithTrace` appends the trace to `error.message`, it rewrites the stack header in the same step. It reads the stack before it changes the message. It rewrites the header only when the stack starts with `<name>: <originalMessage>` (or `<name>` alone for an empty message), followed by the stack frames or the end of the string. Every read and change it makes to an error is best-effort. Source: [`src/index.ts`](../../src/index.ts) (`patchErrorWithTrace`, `patchStack`, `attempt`); tests: [`tests/specs/format.ts`](../../tests/specs/format.ts) and [`tests/specs/package.ts`](../../tests/specs/package.ts).
+Decision, 2026-11-06: when `patchErrorWithTrace` appends the trace to `error.message`, it rewrites the stack header in the same step. It reads the stack before it changes the message. It rewrites the header only when the stack starts with `<name>: <originalMessage>` (or `<name>` alone for an empty message), followed by the stack frames or the end of the string. Every read and change it makes to an error is best-effort. Source: [`src/patch-error.ts`](../../src/patch-error.ts) (`patchErrorWithTrace`, `patchStack`) and [`src/utils/attempt.ts`](../../src/utils/attempt.ts); tests: [`tests/specs/patch-error.ts`](../../tests/specs/patch-error.ts) and [`tests/specs/package.ts`](../../tests/specs/package.ts).
 
 ## Why the stack needs the trace
 
