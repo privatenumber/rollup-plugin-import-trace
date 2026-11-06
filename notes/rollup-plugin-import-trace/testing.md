@@ -28,10 +28,13 @@ Vite also logs a `Pre-transform error` for the same syntax error, without a trac
 
 [`tests/specs/package.ts`](../../tests/specs/package.ts) imports the package by name from a fixture whose `node_modules` links to the repository, so resolution goes through `package.json#exports` to `dist/`:
 
-- One `tsc` run type-checks Rollup and Vite config files against `dist/index.d.ts`.
+- One `tsc` run with `bundler` resolution type-checks Rollup and Vite config files. The `import` condition gives them `dist/index.d.mts`.
+- One `tsc` run with `node16` resolution type-checks an `.mts` and a `.cts` consumer. A value import in a `.cts` file compiles to `require`, so it resolves the `require` condition and must get `dist/index.d.cts`; an ESM-only declaration fails it with `TS1479`. A dynamic `import()`, or an `import type` with `resolution-mode: 'import'`, resolves the `import` condition instead.
 - One Rollup build each from an ESM and a CommonJS script checks that both `dist/index.mjs` and `dist/index.cjs` attach traces.
 
 All other specs import `src/` directly, so these are the only tests of the published files.
+
+The top-level `types` field points to `dist/index.d.ts`, a third copy of the declarations. TypeScript before 4.7 ignores `exports` and cannot read a `.d.cts` file through `types`. Observed with TypeScript 4.6.4, `module: commonjs`, `moduleResolution: node`, `skipLibCheck: true`, and Rollup 4.67.5: `types: ./dist/index.d.cts` failed with `TS7016`, and `./dist/index.d.ts` passed. `skipLibCheck` is needed because Rollup 4's own declarations use `Symbol.asyncDispose`, which TypeScript 4.6 rejects. The fallback fixes how this package's types resolve, not compatibility with every dependency's types. No test covers this, because it would need an old TypeScript as a dev dependency.
 
 ## Verifying that a test can fail
 

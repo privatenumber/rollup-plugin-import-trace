@@ -66,6 +66,41 @@ describe('Package', () => {
 		await spawn(path.join(nodeModulesPath, '.bin/tsc'), [], { cwd: fixture.path });
 	});
 
+	// node16 resolution picks types by condition: a value import in a .cts
+	// file compiles to require, so it must get CommonJS declarations
+	test('types for node16 ESM and CommonJS consumers', async () => {
+		await using fixture = await createFixture({
+			'tsconfig.json': JSON.stringify({
+				compilerOptions: {
+					strict: true,
+					module: 'node16',
+					target: 'esnext',
+					noEmit: true,
+					types: [],
+				},
+			}),
+			'esm.mts': `
+				import { importTrace, type RollupErrorWithTrace } from 'rollup-plugin-import-trace';
+				importTrace();
+				export type T = RollupErrorWithTrace;
+
+				// ESM declarations have no default export. CommonJS declarations
+				// would allow one, so this fails if import resolves the wrong file.
+				// @ts-expect-error -- no default export
+				import importTraceDefault from 'rollup-plugin-import-trace';
+				export { importTraceDefault };
+			`,
+			'cjs.cts': `
+				import { importTrace, type RollupErrorWithTrace } from 'rollup-plugin-import-trace';
+				importTrace();
+				export type T = RollupErrorWithTrace;
+			`,
+			node_modules: linkDependencies(['rollup']),
+		});
+
+		await spawn(path.join(nodeModulesPath, '.bin/tsc'), [], { cwd: fixture.path });
+	});
+
 	for (const [format, file, imports] of [
 		['ESM', 'build.mjs', `
 			import { rollup } from 'rollup';
