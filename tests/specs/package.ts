@@ -1,8 +1,7 @@
 import path from 'node:path';
 import { describe, test, expect } from 'manten';
 import spawn from 'nano-spawn';
-import type { FileTree } from 'fs-fixture';
-import { createFixture } from '../utils/fixture.ts';
+import { type FileTree, createFixture } from 'fs-fixture';
 import { formatTrace } from '../utils/trace.ts';
 
 /**

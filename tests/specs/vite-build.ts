@@ -1,5 +1,5 @@
 import { describe, test } from 'manten';
-import { createFixture } from '../utils/fixture.ts';
+import { createFixture } from 'fs-fixture';
 import { getBuildError, expectTrace } from '../utils/trace.ts';
 import { viteBuild, viteServe } from '../utils/vite.ts';
 import { importTrace } from '../../src/index.ts';

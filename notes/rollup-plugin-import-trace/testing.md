@@ -10,11 +10,11 @@ Decision: partial checks, such as the trace length plus `toContain('a.js')` for 
 
 ## Canonical fixture paths
 
-Fixtures are created under `fs.realpathSync.native(os.tmpdir())` instead of `os.tmpdir()` ([`tests/utils/fixture.ts`](../../tests/utils/fixture.ts)).
+Fixtures must live under a canonical path, with no Windows 8.3 short names. `fs-fixture` 2.16.1 and newer creates them under `fs.promises.realpath(os.tmpdir())`, which uses the native implementation and expands short names ([privatenumber/fs-fixture#36](https://github.com/privatenumber/fs-fixture/issues/36)), so the specs call its `createFixture` directly.
 
 On Windows CI, `os.tmpdir()` is an 8.3 short path. Vite switches to `fs.realpathSync.native`, which expands it, partway through a process. A dev server with a short-path root then serves raw files ([vite/dev-server.md](../vite/dev-server.md#short-path-roots-make-the-dev-server-serve-raw-files)), which made a dev test flaky ([#3](https://github.com/privatenumber/rollup-plugin-import-trace/issues/3)). `@rollup/plugin-node-resolve` 16.0.3 uses JS `fs.realpath`, which keeps short names, so Rollup-only tests are not affected.
 
-With a canonical root, `fixture.getPath()` matches every module ID once Windows backslashes are converted to forward slashes, as the plugin does, so expected traces can be built from it. `fs-fixture` itself resolves `os.tmpdir()` with JS `fs.realpathSync`, which keeps short names ([privatenumber/fs-fixture#36](https://github.com/privatenumber/fs-fixture/issues/36)). The helper becomes unnecessary when that issue is fixed.
+With a canonical root, `fixture.getPath()` matches every module ID once Windows backslashes are converted to forward slashes, as the plugin does, so expected traces can be built from it. Keep `fs-fixture` at 2.16.1 or newer: with an older version, the Vite dev tests become flaky on Windows again.
 
 ## Vite dev errors are read from the logger
 

@@ -1,6 +1,8 @@
 allowBuilds:
   esbuild: false
   unrs-resolver: false
+minimumReleaseAgeExclude:
+  - fs-fixture@2.16.1
 permissions:
   clean-pkg-json:
     skills: true
