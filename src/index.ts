@@ -55,21 +55,115 @@ const formatTrace = (trace: string[]) => `${traceHeader}${trace
 	})
 	.join('\n')}\n`;
 
+// The trace is best-effort. An error object can refuse any read or write,
+// such as a frozen error or a Proxy, and the original error must still reach
+// the caller unchanged.
+const attempt = <T>(action: () => T): T | undefined => {
+	try {
+		return action();
+	} catch {
+		// Leave the error as it is
+		return undefined;
+	}
+};
+
+const framesPattern = /^\n\s+at /;
+
+// Find the stack header for a message: `<name>: <message>`, or `<name>` alone
+// for an empty message. The name comes from the stack, because Rollup keeps
+// the header of a stack it copies from another error. The header must be
+// followed by the frames or the end of the stack, so a longer message that
+// starts with this one does not match.
+const getStackName = (stack: string, message: string) => {
+	const nameEnd = message ? stack.indexOf(': ') : stack.search(/\n|$/);
+	const name = stack.slice(0, nameEnd);
+	if (nameEnd < 1 || /\n|: /.test(name)) {
+		return;
+	}
+
+	const rest = stack.slice(message ? nameEnd + 2 + message.length : nameEnd);
+	const matches = (message === '' || stack.startsWith(message, nameEnd + 2))
+		&& (rest === '' || framesPattern.test(rest));
+	return matches
+		? {
+			name,
+			rest,
+		}
+		: undefined;
+};
+
+// By default, console.error() and util.inspect() print error.stack. V8 formats
+// the stack once, with the message at that time, and Rollup copies the stack
+// of the errors it wraps, so changing the message alone does not change the
+// stack. Like Rollup (tweakStackMessage) and Vite (enhanceRollupError), the
+// stack header is rewritten in the same step as the message. A header that
+// is not the original message was changed by someone else, so it is left as is.
+const patchStack = (
+	error: object,
+	originalStack: string,
+	originalMessage: string,
+	patchedMessage: string,
+) => {
+	const header = getStackName(originalStack, originalMessage);
+	if (header) {
+		(error as { stack: string }).stack = `${header.name}: ${patchedMessage}${header.rest}`;
+	}
+};
+
+const readStack = (error: object) => (
+	'stack' in error && typeof error.stack === 'string' ? error.stack : undefined
+);
+
+type TraceableError = {
+	message: string;
+	importTrace: string[];
+};
+
+const hasImportTrace = (error: unknown): error is TraceableError => (
+	typeof error === 'object'
+	&& error !== null
+	&& 'message' in error
+	&& typeof error.message === 'string'
+	&& 'importTrace' in error
+	&& Array.isArray(error.importTrace)
+);
+
 /**
  * Patches an error's message with its import trace.
  * Reads the `importTrace` property and appends a formatted trace to the message.
+ * It also rewrites the stack header, which `console.error()` and
+ * `util.inspect()` print by default, when that header is the original message.
  */
 export const patchErrorWithTrace = (error: unknown): void => {
-	if (
-		typeof error === 'object'
-		&& error !== null
-		&& 'message' in error
-		&& typeof error.message === 'string'
-		&& 'importTrace' in error
-		&& Array.isArray(error.importTrace)
-		&& !error.message.includes(traceHeader)
-	) {
-		error.message += formatTrace(error.importTrace);
+	attempt(() => {
+		if (!hasImportTrace(error) || error.message.includes(traceHeader)) {
+			return;
+		}
+
+		const originalMessage = error.message;
+		const patchedMessage = originalMessage + formatTrace(error.importTrace);
+
+		// Read before the message changes, so V8 formats an unread stack with
+		// the original message
+		const originalStack = attempt(() => readStack(error));
+		attempt(() => {
+			error.message = patchedMessage;
+		});
+		if (originalStack !== undefined) {
+			attempt(() => patchStack(error, originalStack, originalMessage, patchedMessage));
+		}
+	});
+};
+
+// Attach a trace to an error from Rollup or Vite. If the error does not store
+// the new importTrace, it is left as it is rather than formatting an older one.
+const setImportTrace = (error: object, trace: string[]) => {
+	const isStored = attempt(() => {
+		(error as RollupErrorWithTrace).importTrace = trace;
+		return (error as RollupErrorWithTrace).importTrace === trace;
+	});
+	if (isStored) {
+		patchErrorWithTrace(error);
 	}
 };
 
@@ -192,7 +286,7 @@ const attachImportTrace = async (
 	error: RollupError & { path?: string },
 	resolveRecords?: ResolveRecord[],
 ) => {
-	const moduleId = getErrorFile(error);
+	const moduleId = attempt(() => getErrorFile(error));
 	if (!moduleId) {
 		return;
 	}
@@ -212,8 +306,7 @@ const attachImportTrace = async (
 	}
 
 	if (trace.length > 1) {
-		(error as RollupErrorWithTrace).importTrace = trace;
-		patchErrorWithTrace(error);
+		setImportTrace(error, trace);
 	}
 };
 
@@ -292,15 +385,16 @@ export const importTrace = (): RollupVitePlugin => {
 			return () => {
 				// 4-param signature = error middleware (only called when next(error) is invoked)
 				server.middlewares.use((error, _request, _response, next) => {
-					const file = getErrorFile(error);
-					if (file) {
-						const module_ = server.moduleGraph.getModuleById(file);
-						const trace = getViteTrace(module_);
-						if (trace.length > 1) {
-							(error as RollupErrorWithTrace).importTrace = trace;
-							patchErrorWithTrace(error);
+					attempt(() => {
+						const file = getErrorFile(error);
+						if (file) {
+							const module_ = server.moduleGraph.getModuleById(file);
+							const trace = getViteTrace(module_);
+							if (trace.length > 1) {
+								setImportTrace(error, trace);
+							}
 						}
-					}
+					});
 					next(error);
 				});
 			};

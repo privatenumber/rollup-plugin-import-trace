@@ -13,7 +13,11 @@ export const getBuildError = async (
 	} catch (error) {
 		return error as RollupErrorWithTrace;
 	}
-	throw new Error('Expected build to fail');
+	const error = new Error('Expected build to fail');
+
+	// Start the stack at the test that called this helper
+	Error.captureStackTrace(error, getBuildError);
+	throw error;
 };
 
 const slash = (filePath: string) => filePath.replaceAll('\\', '/');
