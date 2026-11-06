@@ -1,26 +1,20 @@
 # rollup-plugin-import-trace
 
-Rollup/Vite plugin that adds import traces to build errors.
+Rollup plugin that adds import traces to build errors.
 
-When a build error is thrown, the plugin adds an `importTrace` property showing the chain of imports that led to the problematic file:
+A build error names the file that failed, but not how the build reached it. This plugin adds the chain of imports from the entry point to that file:
 
 ```
-Error [RollupError]: node_modules/some-lib/dist/styles.css (1:0): Expression expected (Note that you need plugins to import files that are not JavaScript)
-    at getRollupError (...) {
-  code: 'PARSE_ERROR',
-  id: '/project/node_modules/some-lib/dist/styles.css',
-  loc: { column: 0, file: '/project/node_modules/some-lib/dist/styles.css', line: 1 },
-  frame: '1: .class {\n   ^\n2:     color: red;\n3: }',
+node_modules/some-lib/dist/styles.css (1:0): Expression expected (Note that you need plugins to import files that are not JavaScript)
 
-  // ⬇️ Added by this plugin
-  importTrace: [
-    '/project/src/index.js',
-    '/project/src/components/Button.js',
-    '/project/node_modules/some-lib/dist/index.js',
-    '/project/node_modules/some-lib/dist/styles.css'
-  ]
-}
+Import trace:
+    /project/src/index.js
+    ↳ /project/src/components/Button.js
+    ↳ /project/node_modules/some-lib/dist/index.js
+    ↳ /project/node_modules/some-lib/dist/styles.css
 ```
+
+The trace is appended to `error.message` and to the header of `error.stack`, so it appears whether you print the message or the error itself. The same chain is available as an array in `error.importTrace`.
 
 > [!NOTE]
 > Rollup errors have a `watchFiles` property that may look similar, but it's just files for watch mode to monitor. It includes all files imported from the entry point, not just the chain that led to the error.
@@ -45,33 +39,13 @@ export default {
 ```
 
 > [!IMPORTANT]
-> In Rollup, list `importTrace()` **first** in the plugins array. Its `resolveId` hook needs to run before other plugins to record import relationships for error recovery. In Vite, the plugin uses `enforce: 'pre'`, so it runs before Vite's own resolver wherever it is listed. Other plugins with `enforce: 'pre'` run in their listed order, so list `importTrace()` before them.
+> List `importTrace()` **first** in the plugins array. Its `resolveId` hook needs to run before other plugins to record import relationships for error recovery.
 
-Works with Rollup and Vite (both dev and build modes).
-
-## Formatting Utility
-
-In Vite dev mode, the error message is automatically formatted for the browser overlay:
-
-```
-[plugin:vite:import-analysis] Failed to parse source for import analysis because the content contains invalid JS syntax. If you are using JSX, make sure to name the file with the .jsx or .tsx extension.
-
-Import trace:
-    /project/index.js
-    ↳ /project/a.js
-    ↳ /project/b.js
-    ↳ /project/broken.js
-
-/project/broken.js:1:30
-1  |  export const value = "unclosed
-   |                                ^
-    at TransformPluginContext._formatLog ...
-```
-
-For other cases (e.g. CLI tools), use `patchErrorWithTrace(error)` to format and append the trace to the error message:
+Errors thrown by `rollup()` and `bundle.generate()` or `bundle.write()` include the trace:
 
 ```ts
-import { importTrace, patchErrorWithTrace } from 'rollup-plugin-import-trace'
+import { rollup } from 'rollup'
+import { importTrace } from 'rollup-plugin-import-trace'
 
 try {
     await rollup({
@@ -79,22 +53,26 @@ try {
         plugins: [importTrace()]
     })
 } catch (error) {
-    patchErrorWithTrace(error)
-    console.error(error.message)
+    console.error(error.message) // Ends with the "Import trace:" block
 }
 ```
 
-Output:
+## Compatibility
 
-```
-node_modules/some-lib/dist/styles.css (1:0): Expression expected (Note that you need plugins to import files that are not JavaScript)
+| Tool | Supported |
+| --- | --- |
+| Rollup | 3 and 4 |
+| Vite | 5, 6, and 7: builds and the dev server |
+| Vite 8 and Rolldown | No |
 
-Import trace:
-    /project/src/index.js
-    ↳ /project/src/components/Button.js
-    ↳ /project/node_modules/some-lib/dist/index.js
-    ↳ /project/node_modules/some-lib/dist/styles.css
-```
+Vite 5–7 build with Rollup, so the plugin works there as a Vite plugin. It uses `enforce: 'pre'`, so it runs before Vite's own resolver wherever it is listed. List it before other `enforce: 'pre'` plugins. In the dev server, the trace also appears in the error overlay.
 
-> [!TIP]
-> `patchErrorWithTrace` accepts `unknown`—safely does nothing if the error doesn't have an `importTrace` array.
+Vite 8 builds with Rolldown, which gives plugins a copy of the build error, so the plugin cannot add the trace to the error your build throws.
+
+## `patchErrorWithTrace(error)`
+
+Appends the formatted trace from `error.importTrace` to the message and stack header. The plugin already calls it for every error it traces, so you only need it for an error whose `importTrace` was set some other way. It accepts `unknown`, does nothing if the error has no `importTrace` array, and does nothing if the trace is already in the message.
+
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md).
