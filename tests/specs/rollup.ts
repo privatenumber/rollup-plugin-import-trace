@@ -180,7 +180,7 @@ describe('Rollup', () => {
 			};
 
 			const error = await getBuildError(() => rollup({
-				input: 'C:\\project\\index.js',
+				input: String.raw`C:\project\index.js`,
 				plugins: [
 					importTrace(),
 					{
