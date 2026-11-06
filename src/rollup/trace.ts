@@ -6,15 +6,21 @@ import { getErrorFiles } from '../get-error-file.ts';
 import { setImportTrace } from '../patch-error.ts';
 import { replayResolveRecords, type ResolveRecord } from './recover-edges.ts';
 
-// Map each module to its first importer, from Rollup's module graph.
+// Map each module to its first importer, and collect the entry modules, from
+// Rollup's module graph. IDs are normalized, so on Windows they no longer match
+// Rollup's own IDs and cannot be passed back to getModuleInfo().
 // importedIds is populated after resolveId completes for each import,
 // so this data is available even when moduleParsed never fired.
-const buildImporterMap = (context: PluginContext) => {
+const readModuleGraph = (context: PluginContext) => {
 	const importerMap = new Map<string, string>();
+	const entryIds = new Set<string>();
 	for (const id of context.getModuleIds()) {
 		const info = context.getModuleInfo(id);
 		if (info) {
 			const normalizedId = normalizePath(id);
+			if (info.isEntry) {
+				entryIds.add(normalizedId);
+			}
 			for (const importedId of [...info.importedIds, ...info.dynamicallyImportedIds]) {
 				const normalizedImportedId = normalizePath(importedId);
 				if (!importerMap.has(normalizedImportedId)) {
@@ -23,7 +29,10 @@ const buildImporterMap = (context: PluginContext) => {
 			}
 		}
 	}
-	return importerMap;
+	return {
+		importerMap,
+		entryIds,
+	};
 };
 
 const getTrace = (
@@ -41,12 +50,12 @@ const getTrace = (
 // here: they either resolve normally or produce UNRESOLVED_IMPORT warnings.
 const recoverTrace = async (
 	moduleId: string,
-	importerMap: Map<string, string>,
+	{ importerMap, entryIds }: ReturnType<typeof readModuleGraph>,
 	resolveRecords: ResolveRecord[],
 	context: PluginContext,
 ) => {
 	let trace = getTrace(moduleId, importerMap);
-	while (!context.getModuleInfo(trace[0]!)?.isEntry) {
+	while (!entryIds.has(trace[0]!)) {
 		const { length } = trace;
 		await replayResolveRecords(trace[0]!, importerMap, resolveRecords, context);
 		trace = getTrace(moduleId, importerMap);
@@ -74,15 +83,15 @@ export const attachImportTrace = async (
 	}
 
 	// Use the most specific file that the module graph can reach
-	const importerMap = buildImporterMap(context);
+	const graph = readModuleGraph(context);
 	for (const moduleId of errorFiles) {
 		const trace = resolveRecords
-			? await recoverTrace(moduleId, importerMap, resolveRecords, context)
-			: getTrace(moduleId, importerMap);
+			? await recoverTrace(moduleId, graph, resolveRecords, context)
+			: getTrace(moduleId, graph.importerMap);
 
 		// A chain that does not reach an entry module would look complete but
 		// start in the middle, so report none rather than a misleading one
-		if (trace.length > 1 && context.getModuleInfo(trace[0]!)?.isEntry) {
+		if (trace.length > 1 && graph.entryIds.has(trace[0]!)) {
 			setImportTrace(error, trace);
 			return;
 		}

@@ -170,6 +170,38 @@ describe('Rollup', () => {
 			]);
 		});
 
+		// Rollup uses backslash module IDs on Windows. Virtual modules with
+		// backslash IDs exercise the same normalization on every OS.
+		test('module IDs with backslashes', async () => {
+			const files: Record<string, string> = {
+				'C:\\project\\index.js': 'export { value } from "./a.js"',
+				'C:\\project\\a.js': 'export { value } from "./broken.js"',
+				'C:\\project\\broken.js': 'invalid syntax {{{',
+			};
+
+			const error = await getBuildError(() => rollup({
+				input: 'C:\\project\\index.js',
+				plugins: [
+					importTrace(),
+					{
+						name: 'virtual-windows-paths',
+						resolveId: (source, importer) => (
+							importer
+								? `C:\\project\\${source.slice(2)}`
+								: source
+						),
+						load: id => files[id],
+					},
+				],
+			}));
+
+			expect(error.importTrace).toStrictEqual([
+				'C:/project/index.js',
+				'C:/project/a.js',
+				'C:/project/broken.js',
+			]);
+		});
+
 		// Load errors such as ENOENT have `path` but no `id` or `loc.file`
 		test('load error located by error.path', async () => {
 			await using fixture = await createFixture({
