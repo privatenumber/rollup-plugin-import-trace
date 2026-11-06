@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'manten';
 import { rollup, type Plugin } from 'rollup';
 import nodeResolve from '@rollup/plugin-node-resolve';
+import commonjs from '@rollup/plugin-commonjs';
 import { createFixture } from 'fs-fixture';
 import { getBuildError, expectTrace, expectNoTrace } from '../utils/trace.ts';
 import { importTrace } from '../../src/index.ts';
@@ -139,6 +140,33 @@ describe('Rollup', () => {
 				'index.js',
 				'node_modules/some-lib/index.js',
 				'node_modules/some-lib/broken.js',
+			]);
+		});
+
+		// The error's id is the requiring module, and loc.file is the required
+		// file that failed to parse
+		test('CommonJS require of a broken file', async () => {
+			await using fixture = await createFixture({
+				'index.js': 'import lib from "lib"; console.log(lib);',
+				'node_modules/lib': {
+					'package.json': JSON.stringify({
+						name: 'lib',
+						main: 'index.js',
+					}),
+					'index.js': 'module.exports = require("./broken.js");',
+					'broken.js': 'module.exports = "unclosed',
+				},
+			});
+
+			const error = await getBuildError(() => rollup({
+				input: fixture.getPath('index.js'),
+				plugins: [importTrace(), nodeResolve(), commonjs()],
+			}));
+
+			expectTrace(error, fixture, [
+				'index.js',
+				'node_modules/lib/index.js',
+				'node_modules/lib/broken.js',
 			]);
 		});
 

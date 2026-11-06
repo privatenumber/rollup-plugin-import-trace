@@ -1,6 +1,6 @@
 import { describe, test } from 'manten';
 import { createFixture } from 'fs-fixture';
-import { getBuildError, expectTrace } from '../utils/trace.ts';
+import { getBuildError, expectTrace, expectNoTrace } from '../utils/trace.ts';
 import { viteBuild, viteServe } from '../utils/vite.ts';
 import { importTrace } from '../../src/index.ts';
 
@@ -105,5 +105,28 @@ describe('Vite build', () => {
 			'node_modules/some-lib/index.js',
 			'node_modules/some-lib/broken.js',
 		]);
+	});
+
+	// Vite drops more import edges than plain Rollup, and replay can recover
+	// only part of this chain. A trace must start at an entry module, so the
+	// partial chain from the package entry is not reported.
+	test('no partial trace when the chain cannot reach the entry', async () => {
+		await using fixture = await createFixture({
+			'index.js': 'import lib from "some-lib"; console.log(lib);',
+			'node_modules/some-lib': {
+				'package.json': JSON.stringify({
+					name: 'some-lib',
+					main: 'index.js',
+				}),
+				'index.js': 'module.exports = require("./broken.js");',
+				'broken.js': 'module.exports = "unclosed',
+			},
+		});
+
+		const error = await getBuildError(() => viteBuild(fixture.path, {
+			plugins: [importTrace()],
+		}));
+
+		expectNoTrace(error);
 	});
 });

@@ -1,6 +1,6 @@
 import { attempt } from '../utils/attempt.ts';
 import { walkImporters } from '../utils/walk-importers.ts';
-import { getErrorFile } from '../get-error-file.ts';
+import { getErrorFiles } from '../get-error-file.ts';
 import { setImportTrace, type RollupErrorWithTrace } from '../patch-error.ts';
 
 /**
@@ -52,11 +52,12 @@ export const addErrorMiddleware = (server: ViteDevServer) => {
 	// 4-param signature = error middleware (only called when next(error) is invoked)
 	server.middlewares.use((error, _request, _response, next) => {
 		attempt(() => {
-			const file = getErrorFile(error);
-			if (file) {
+			// Use the most specific file that the module graph knows
+			for (const file of getErrorFiles(error)) {
 				const trace = getViteTrace(server.moduleGraph.getModuleById(file));
 				if (trace.length > 1) {
 					setImportTrace(error, trace);
+					return;
 				}
 			}
 		});

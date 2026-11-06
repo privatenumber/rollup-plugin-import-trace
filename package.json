@@ -60,6 +60,7 @@
 		}
 	},
 	"devDependencies": {
+		"@rollup/plugin-commonjs": "^29.0.3",
 		"@rollup/plugin-node-resolve": "^16.0.3",
 		"@types/node": "^22.14.1",
 		"clean-pkg-json": "^2.1.0",
