@@ -40,7 +40,7 @@
 	"scripts": {
 		"build": "pkgroll --minify",
 		"test": "pnpm build && node tests/index.ts",
-		"lint": "lintroll --cache --node .",
+		"lint": "lintroll --cache .",
 		"type-check": "tsc",
 		"prepack": "pnpm build && clean-pkg-json"
 	},
