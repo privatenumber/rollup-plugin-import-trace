@@ -3,9 +3,15 @@ import type { PluginContext } from 'rollup';
 import { normalizePath } from '../utils/normalize-path.ts';
 
 /**
- * A resolveId call the plugin recorded during the build
+ * A resolveId call the plugin recorded during the build. The options, such as
+ * import attributes, can change what a resolver returns, so replay passes
+ * them again.
  */
-export type ResolveRecord = [source: string, importer: string];
+export type ResolveRecord = [
+	source: string,
+	importer: string,
+	options: Parameters<PluginContext['resolve']>[2],
+];
 
 // Extract subpath from an import specifier for fuzzy matching.
 // Relative: ./protos/a/b.ts → protos/a/b.ts
@@ -58,10 +64,13 @@ export const replayResolveRecords = async (
 	context: PluginContext,
 ) => {
 	for (let index = resolveRecords.length - 1; index >= 0; index -= 1) {
-		const [source, importer] = resolveRecords[index]!;
+		const [source, importer, options] = resolveRecords[index]!;
 		const normalizedImporter = normalizePath(importer);
 		try {
-			const resolved = await context.resolve(source, importer, { skipSelf: true });
+			const resolved = await context.resolve(source, importer, {
+				...options,
+				skipSelf: true,
+			});
 			if (resolved) {
 				const normalizedId = normalizePath(resolved.id);
 				if (!importerMap.has(normalizedId)) {

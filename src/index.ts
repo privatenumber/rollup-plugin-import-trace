@@ -72,9 +72,9 @@ export const importTrace = (): RollupVitePlugin => {
 		// throw from resolveId.
 		resolveId: {
 			order: 'pre',
-			handler: (source, importer) => {
+			handler: (source, importer, options) => {
 				if (importer && !isDevServer) {
-					resolveRecords.push([source, importer]);
+					resolveRecords.push([source, importer, options]);
 				}
 				return null;
 			},
@@ -89,6 +89,10 @@ export const importTrace = (): RollupVitePlugin => {
 				// eslint-disable-next-line unicorn/no-this-outside-of-class -- Rollup passes the plugin context as `this` (https://github.com/pvtnbr/lintroll/issues/48)
 				await attachImportTrace(this, error, resolveRecords);
 			}
+
+			// Output-phase errors are traced from the complete module graph, so
+			// the records are not needed after this point
+			resolveRecords.length = 0;
 		},
 
 		// Handle errors during output generation (renderChunk, generateBundle).

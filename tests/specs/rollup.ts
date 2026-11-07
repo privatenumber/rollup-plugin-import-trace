@@ -266,6 +266,47 @@ describe('Rollup', () => {
 			expectTrace(error, fixture, ['index.js', 'a.js', 'node_modules/pkg/index.js']);
 		});
 
+		// Replay must resolve with the original options. Without the import
+		// attribute, this resolver returns the failing module for a.js's import,
+		// which would report an edge that the build never had.
+		test('replay keeps import attributes', async () => {
+			await using fixture = await createFixture({
+				'index.js': 'import "./a.js"; import "./b.js";',
+				'a.js': 'import data from "./data" with { type: "json" }; console.log(data);',
+				'b.js': 'import "pkg";',
+			});
+			const failingModule = fixture.getPath('node_modules/pkg/index.js');
+
+			// Fail only after a.js's import is recorded, so replay sees it
+			let markDataResolved!: () => void;
+			const dataResolved = new Promise<void>((resolve) => {
+				markDataResolved = resolve;
+			});
+			const error = await getBuildError(() => rollup({
+				input: fixture.getPath('index.js'),
+				plugins: [
+					importTrace(),
+					{
+						name: 'attribute-resolver',
+						resolveId: async (source, _importer, { attributes }) => {
+							if (source === './data') {
+								markDataResolved();
+								return attributes.type === 'json' ? '\0data' : failingModule;
+							}
+							if (source === 'pkg') {
+								await dataResolved;
+								throw Object.assign(new Error('ENOENT'), { path: failingModule });
+							}
+							return null;
+						},
+						load: id => (id === '\0data' ? 'export default 1;' : null),
+					},
+				],
+			}));
+
+			expectNoTrace(error);
+		});
+
 		test('the plugin is listed after the throwing resolver', async () => {
 			await using fixture = await createFixture({
 				'index.js': 'export { value } from "./a.js"',
