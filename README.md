@@ -38,9 +38,6 @@ export default {
 }
 ```
 
-> [!IMPORTANT]
-> List `importTrace()` **first** in the plugins array. Its `resolveId` hook needs to run before other plugins to record import relationships for error recovery.
-
 Errors thrown by `rollup()` and `bundle.generate()` or `bundle.write()` include the trace:
 
 ```ts
@@ -65,7 +62,7 @@ try {
 | Vite | 5, 6, and 7: builds and the dev server |
 | Vite 8 and Rolldown | No |
 
-Vite 5–7 build with Rollup, so the plugin works there as a Vite plugin. It uses `enforce: 'pre'`, so it runs before Vite's own resolver wherever it is listed. List it before other `enforce: 'pre'` plugins. In the dev server, the trace also appears in the error overlay.
+Vite 5–7 build with Rollup, so the plugin works there as a Vite plugin. In the dev server, the trace also appears in the error overlay.
 
 Vite 8 builds with Rolldown, which gives plugins a copy of the build error, so the plugin cannot add the trace to the error your build throws.
 

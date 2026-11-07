@@ -6,7 +6,6 @@ import { addErrorMiddleware, type ViteDevServer } from './vite/dev-server.ts';
 export { patchErrorWithTrace, type RollupErrorWithTrace } from './patch-error.ts';
 
 type RollupVitePlugin = Plugin & {
-	enforce?: 'pre' | 'post';
 	configureServer?: (server: ViteDevServer) => (() => void) | void;
 };
 
@@ -53,14 +52,6 @@ export const importTrace = (): RollupVitePlugin => {
 	return {
 		name: 'import-trace',
 
-		// Vite runs its own resolver (vite:resolve) before normal plugins, and it
-		// ends the resolveId chain. In builds, commonjs--resolver resolves
-		// imports through that chain and then loads modules that may be
-		// CommonJS, so a syntax error in node_modules can throw from resolveId.
-		// Running first lets resolveId record the import before vite:resolve
-		// claims it. Rollup ignores this.
-		enforce: 'pre',
-
 		// Vite dev: return function to register post-middleware
 		configureServer: (server) => {
 			isDevServer = true;
@@ -72,12 +63,21 @@ export const importTrace = (): RollupVitePlugin => {
 		},
 
 		// Capture every resolution attempt so we can recover
-		// relationships that Rollup drops when resolveId fails mid-chain
-		resolveId: (source, importer) => {
-			if (importer && !isDevServer) {
-				resolveRecords.push([source, importer]);
-			}
-			return null;
+		// relationships that Rollup drops when resolveId fails mid-chain.
+		// order: 'pre' runs it before other plugins' resolveId hooks, which
+		// may throw, wherever the plugin is listed. In Vite it also runs before
+		// vite:resolve, which ends the resolveId chain: in builds,
+		// commonjs--resolver resolves imports through that chain and then loads
+		// modules that may be CommonJS, so a syntax error in node_modules can
+		// throw from resolveId.
+		resolveId: {
+			order: 'pre',
+			handler: (source, importer) => {
+				if (importer && !isDevServer) {
+					resolveRecords.push([source, importer]);
+				}
+				return null;
+			},
 		},
 
 		closeBundle: () => {

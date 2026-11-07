@@ -1,6 +1,6 @@
 # Vite plugin order and resolveId
 
-Last verified against Vite 7.3.1 source, `@rollup/plugin-commonjs` 29.0.0 source, and Vite 7.3.7 behavior, 2026-11-05.
+Last verified against Vite 7.3.1 and 7.3.7 source, Rollup 4.67.5 source, `@rollup/plugin-commonjs` 29.0.0 source, and Vite 7.3.7 behavior, 2026-11-08.
 
 ## Vite's resolver runs before normal user plugins
 
@@ -12,9 +12,13 @@ In builds, Vite enables `@rollup/plugin-commonjs` for `node_modules` (Vite 7.3.1
 
 ## Consequence for this plugin
 
-The plugin recovers dropped edges by replaying the `resolveId` calls it recorded. With normal order, the nested `this.resolve()` stops at `vite:resolve` before it reaches the plugin, so nothing is recorded. `enforce: 'pre'` puts the plugin ahead of `vite:resolve`, but not ahead of Vite's alias plugin, other `enforce: 'pre'` plugins listed earlier, or hooks with `order: 'pre'`. Observed with Vite 7.3.7: without `enforce: 'pre'`, a syntax error in `node_modules/some-lib/broken.js` had no trace; with it, the trace was complete ([`tests/specs/vite-build.ts`](../../tests/specs/vite-build.ts)).
+The plugin recovers dropped edges by replaying the `resolveId` calls it recorded. With normal order, the nested `this.resolve()` stops at `vite:resolve` before it reaches the plugin, so nothing is recorded.
 
-The same order applies to the dev server, so with `enforce: 'pre'` the imports the dev server resolves reach the plugin's `resolveId`. A long-running server can resolve many imports without calling `buildStart`, which clears the records, again. The plugin therefore stops recording once `configureServer` has run, and records again after `closeBundle`, which Vite calls when the server closes ([`tests/specs/vite-dev.ts`](../../tests/specs/vite-dev.ts), [`tests/specs/vite-build.ts`](../../tests/specs/vite-build.ts)).
+The plugin's `resolveId` is an object hook with `order: 'pre'`. Vite and Rollup run each hook's `order: 'pre'` handlers before all other handlers of that hook, keeping plugin order within each group ([Vite `getSortedPluginsByHook`](https://github.com/vitejs/vite/blob/v7.3.7/packages/vite/src/node/plugins/index.ts#L131-L146), [Rollup `getSortedValidatedPlugins`](https://github.com/rollup/rollup/blob/v4.67.5/src/utils/PluginDriver.ts#L430-L443)). The hook therefore runs before `vite:resolve` and any other `resolveId` without `order: 'pre'`, wherever `importTrace()` is listed. Only another `order: 'pre'` `resolveId` listed earlier runs first. Rollup has supported object hooks with `order` since 2.78, which covers the `^3 || ^4` peer range.
+
+The plugin used `enforce: 'pre'` before 2026-11-08. That moved it ahead of `vite:resolve`, but Rollup ignores `enforce`, so Rollup users had to list the plugin first. Observed with Vite 7.3.7: with neither `enforce: 'pre'` nor `order: 'pre'`, a syntax error in `node_modules/some-lib/broken.js` had no trace; with `order: 'pre'` alone, it was complete ([`tests/specs/vite-build.ts`](../../tests/specs/vite-build.ts)).
+
+The same order applies to the dev server, so the imports the dev server resolves reach the plugin's `resolveId`. A long-running server can resolve many imports without calling `buildStart`, which clears the records, again. The plugin therefore stops recording once `configureServer` has run, and records again after `closeBundle`, which Vite calls when the server closes ([`tests/specs/vite-dev.ts`](../../tests/specs/vite-dev.ts), [`tests/specs/vite-build.ts`](../../tests/specs/vite-build.ts)).
 
 ## Recovering dropped edges, and what remains
 

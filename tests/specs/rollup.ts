@@ -266,6 +266,23 @@ describe('Rollup', () => {
 			expectTrace(error, fixture, ['index.js', 'a.js', 'node_modules/pkg/index.js']);
 		});
 
+		test('the plugin is listed after the throwing resolver', async () => {
+			await using fixture = await createFixture({
+				'index.js': 'export { value } from "./a.js"',
+				'a.js': 'export { value } from "pkg/deep/module.js"',
+			});
+
+			const error = await getBuildError(() => rollup({
+				input: fixture.getPath('index.js'),
+				plugins: [
+					throwingResolver('pkg/deep/module.js', fixture.getPath('node_modules/pkg/deep/module.js')),
+					importTrace(),
+				],
+			}));
+
+			expectTrace(error, fixture, ['index.js', 'a.js', 'node_modules/pkg/deep/module.js']);
+		});
+
 		// Each replayed record runs the whole resolveId chain again, so replay
 		// must not re-resolve every import in the build
 		test('replay does not re-resolve every import', async () => {
