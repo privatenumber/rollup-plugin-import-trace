@@ -95,7 +95,9 @@ export const importTrace = (): RollupVitePlugin => {
 			resolveRecords.length = 0;
 		},
 
-		// Handle errors during output generation (renderChunk, generateBundle).
+		// Handle errors during chunk rendering (renderChunk and other render
+		// hooks). Rollup calls renderError only for those, not for errors from
+		// generateBundle or writeBundle, which run later.
 		// buildEnd only receives build-phase errors; output-phase errors
 		// (e.g. MISSING_EXPORT from chunk.generateExports) need renderError.
 		async renderError(error) {

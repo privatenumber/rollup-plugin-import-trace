@@ -38,7 +38,7 @@ export default {
 }
 ```
 
-Errors thrown by `rollup()` and `bundle.generate()` or `bundle.write()` include the trace:
+Errors thrown by `rollup()` include the trace, and so do errors from `bundle.generate()` or `bundle.write()` while Rollup renders chunks. Rollup does not let plugins handle errors from the later `generateBundle` and `writeBundle` hooks, so those have no trace.
 
 ```ts
 import { rollup } from 'rollup'
