@@ -266,6 +266,45 @@ describe('Rollup', () => {
 			expectTrace(error, fixture, ['index.js', 'a.js', 'node_modules/pkg/index.js']);
 		});
 
+		// Each replayed record runs the whole resolveId chain again, so replay
+		// must not re-resolve every import in the build
+		test('replay does not re-resolve every import', async () => {
+			const moduleCount = 50;
+			const files: Record<string, string> = {
+				'index.js': Array.from({ length: moduleCount }, (_, index) => `import "./m${index}.js";`).join('\n'),
+			};
+			for (let index = 0; index < moduleCount; index += 1) {
+				files[`m${index}.js`] = index === moduleCount - 1 ? 'import "pkg/deep/module.js";' : 'export {};';
+			}
+			await using fixture = await createFixture(files);
+
+			let resolveCalls = 0;
+			const error = await getBuildError(() => rollup({
+				input: fixture.getPath('index.js'),
+				plugins: [
+					importTrace(),
+					{
+						name: 'counter',
+						resolveId: () => {
+							resolveCalls += 1;
+							return null;
+						},
+					},
+					throwingResolver('pkg/deep/module.js', fixture.getPath('node_modules/pkg/deep/module.js')),
+				],
+			}));
+
+			expectTrace(error, fixture, [
+				'index.js',
+				`m${moduleCount - 1}.js`,
+				'node_modules/pkg/deep/module.js',
+			]);
+
+			// The build itself resolves the entry and each import once. Replaying
+			// every record would double that.
+			expect(resolveCalls).toBeLessThan((moduleCount + 2) * 1.5);
+		});
+
 		// Re-resolving throws again, so the specifier's subpath is matched against the error path
 		for (const [specifier, errorFile] of [
 			['./deep/module.js', 'deep/module.js'],

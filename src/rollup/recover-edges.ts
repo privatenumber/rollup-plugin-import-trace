@@ -45,6 +45,11 @@ const matchesModule = (source: string, moduleId: string) => {
  * Rollup records no import edge when a plugin's resolveId hook throws (a null
  * return only passes to the next plugin), so the module graph cannot reach the
  * failing module. Adds the recovered edge to `importerMap`.
+ *
+ * Records are replayed newest first. The failed resolution stops the build,
+ * so it is among the last ones recorded, and each replay runs the whole
+ * resolveId chain again. Replaying oldest first re-resolved every import in
+ * the build before reaching it.
  */
 export const replayResolveRecords = async (
 	moduleId: string,
@@ -52,7 +57,8 @@ export const replayResolveRecords = async (
 	resolveRecords: ResolveRecord[],
 	context: PluginContext,
 ) => {
-	for (const [source, importer] of resolveRecords) {
+	for (let index = resolveRecords.length - 1; index >= 0; index -= 1) {
+		const [source, importer] = resolveRecords[index]!;
 		const normalizedImporter = normalizePath(importer);
 		try {
 			const resolved = await context.resolve(source, importer, { skipSelf: true });
