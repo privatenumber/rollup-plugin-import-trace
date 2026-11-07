@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'manten';
 import { rollup, type Plugin } from 'rollup';
 import nodeResolve from '@rollup/plugin-node-resolve';
+import commonjs from '@rollup/plugin-commonjs';
 import { createFixture } from 'fs-fixture';
 import { getBuildError, expectTrace, expectNoTrace } from '../utils/trace.ts';
 import { importTrace } from '../../src/index.ts';
@@ -142,6 +143,65 @@ describe('Rollup', () => {
 			]);
 		});
 
+		// The error's id is the requiring module, and loc.file is the required
+		// file that failed to parse
+		test('CommonJS require of a broken file', async () => {
+			await using fixture = await createFixture({
+				'index.js': 'import lib from "lib"; console.log(lib);',
+				'node_modules/lib': {
+					'package.json': JSON.stringify({
+						name: 'lib',
+						main: 'index.js',
+					}),
+					'index.js': 'module.exports = require("./broken.js");',
+					'broken.js': 'module.exports = "unclosed',
+				},
+			});
+
+			const error = await getBuildError(() => rollup({
+				input: fixture.getPath('index.js'),
+				plugins: [importTrace(), nodeResolve(), commonjs()],
+			}));
+
+			expectTrace(error, fixture, [
+				'index.js',
+				'node_modules/lib/index.js',
+				'node_modules/lib/broken.js',
+			]);
+		});
+
+		// Rollup uses backslash module IDs on Windows. Virtual modules with
+		// backslash IDs exercise the same normalization on every OS.
+		test('module IDs with backslashes', async () => {
+			const files: Record<string, string> = {
+				'C:\\project\\index.js': 'export { value } from "./a.js"',
+				'C:\\project\\a.js': 'export { value } from "./broken.js"',
+				'C:\\project\\broken.js': 'invalid syntax {{{',
+			};
+
+			const error = await getBuildError(() => rollup({
+				input: String.raw`C:\project\index.js`,
+				plugins: [
+					importTrace(),
+					{
+						name: 'virtual-windows-paths',
+						resolveId: (source, importer) => (
+							importer
+								? `C:\\project\\${source.slice(2)}`
+								: source
+						),
+						load: id => files[id],
+					},
+				],
+			}));
+
+			expect(error.importTrace).toStrictEqual([
+				'C:/project/index.js',
+				'C:/project/a.js',
+				'C:/project/broken.js',
+			]);
+		});
+
 		// Load errors such as ENOENT have `path` but no `id` or `loc.file`
 		test('load error located by error.path', async () => {
 			await using fixture = await createFixture({
@@ -229,6 +289,41 @@ describe('Rollup', () => {
 				expectTrace(error, fixture, ['index.js', 'a.js', errorFile]);
 			});
 		}
+	});
+
+	// @rollup/plugin-commonjs resolves modules again by absolute path, which
+	// can be the only record of an edge. A Windows path has no forward slash,
+	// so it must be matched as a path, not as a package subpath. The drive
+	// letter path reproduces this on every OS.
+	test('recovers an edge recorded with an absolute path', async () => {
+		const brokenId = String.raw`C:\project\broken.js`;
+		const files: Record<string, string> = {
+			[String.raw`C:\project\index.js`]: 'export { value } from "./a.js"',
+			[String.raw`C:\project\a.js`]: `export { value } from ${JSON.stringify(brokenId)}`,
+		};
+
+		const error = await getBuildError(() => rollup({
+			input: String.raw`C:\project\index.js`,
+			plugins: [
+				importTrace(),
+				{
+					name: 'virtual-windows-paths',
+					resolveId: (source) => {
+						if (source === brokenId) {
+							throw Object.assign(new Error('ENOENT'), { path: brokenId });
+						}
+						return source.startsWith('./') ? `C:\\project\\${source.slice(2)}` : source;
+					},
+					load: id => files[id],
+				},
+			],
+		}));
+
+		expect(error.importTrace).toStrictEqual([
+			'C:/project/index.js',
+			'C:/project/a.js',
+			'C:/project/broken.js',
+		]);
 	});
 
 	/**

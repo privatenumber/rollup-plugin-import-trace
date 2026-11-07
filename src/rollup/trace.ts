@@ -2,19 +2,25 @@ import type { PluginContext, RollupError } from 'rollup';
 import { attempt } from '../utils/attempt.ts';
 import { normalizePath } from '../utils/normalize-path.ts';
 import { walkImporters } from '../utils/walk-importers.ts';
-import { getErrorFile } from '../get-error-file.ts';
+import { getErrorFiles } from '../get-error-file.ts';
 import { setImportTrace } from '../patch-error.ts';
 import { replayResolveRecords, type ResolveRecord } from './recover-edges.ts';
 
-// Map each module to its first importer, from Rollup's module graph.
+// Map each module to its first importer, and collect the entry modules, from
+// Rollup's module graph. IDs are normalized, so on Windows they no longer match
+// Rollup's own IDs and cannot be passed back to getModuleInfo().
 // importedIds is populated after resolveId completes for each import,
 // so this data is available even when moduleParsed never fired.
-const buildImporterMap = (context: PluginContext) => {
+const readModuleGraph = (context: PluginContext) => {
 	const importerMap = new Map<string, string>();
+	const entryIds = new Set<string>();
 	for (const id of context.getModuleIds()) {
 		const info = context.getModuleInfo(id);
 		if (info) {
 			const normalizedId = normalizePath(id);
+			if (info.isEntry) {
+				entryIds.add(normalizedId);
+			}
 			for (const importedId of [...info.importedIds, ...info.dynamicallyImportedIds]) {
 				const normalizedImportedId = normalizePath(importedId);
 				if (!importerMap.has(normalizedImportedId)) {
@@ -23,13 +29,42 @@ const buildImporterMap = (context: PluginContext) => {
 			}
 		}
 	}
-	return importerMap;
+	return {
+		importerMap,
+		entryIds,
+	};
 };
 
 const getTrace = (
 	moduleId: string,
 	importerMap: Map<string, string>,
 ) => walkImporters(moduleId, id => importerMap.get(id));
+
+// The graph walk stops early when a plugin's resolveId threw (e.g.
+// commonjs--resolver failing to parse a required file), because Rollup
+// records no import edge for that resolution. Every module above the failure
+// can be affected, not only the failing one: resolving a CommonJS package
+// also loads it, so its broken require() drops the edge into the package too.
+// Replay for the top of the chain until it reaches an entry module or no
+// further edge can be recovered. Standard "not found" errors don't reach
+// here: they either resolve normally or produce UNRESOLVED_IMPORT warnings.
+const recoverTrace = async (
+	moduleId: string,
+	{ importerMap, entryIds }: ReturnType<typeof readModuleGraph>,
+	resolveRecords: ResolveRecord[],
+	context: PluginContext,
+) => {
+	let trace = getTrace(moduleId, importerMap);
+	while (!entryIds.has(trace[0]!)) {
+		const { length } = trace;
+		await replayResolveRecords(trace[0]!, importerMap, resolveRecords, context);
+		trace = getTrace(moduleId, importerMap);
+		if (trace.length === length) {
+			break;
+		}
+	}
+	return trace;
+};
 
 /**
  * Attach the import trace of the module that caused a Rollup error.
@@ -42,26 +77,23 @@ export const attachImportTrace = async (
 	resolveRecords?: ResolveRecord[],
 ) => {
 	// A malformed error, such as a Proxy that throws on read, propagates as is
-	const moduleId = attempt(() => getErrorFile(error));
-	if (!moduleId) {
+	const errorFiles = attempt(() => getErrorFiles(error)) ?? [];
+	if (errorFiles.length === 0) {
 		return;
 	}
 
-	const importerMap = buildImporterMap(context);
-	let trace = getTrace(moduleId, importerMap);
+	// Use the most specific file that the module graph can reach
+	const graph = readModuleGraph(context);
+	for (const moduleId of errorFiles) {
+		const trace = resolveRecords
+			? await recoverTrace(moduleId, graph, resolveRecords, context)
+			: getTrace(moduleId, graph.importerMap);
 
-	if (trace.length <= 1 && resolveRecords) {
-		// Graph walk failed — the error module has no recorded importer.
-		// This only happens when a plugin's resolveId threw (e.g.
-		// commonjs-resolver hitting ENOENT), which prevents Rollup
-		// from recording the import edge. Standard "not found" errors
-		// don't reach here: they either resolve normally or produce
-		// UNRESOLVED_IMPORT warnings (not build errors).
-		await replayResolveRecords(moduleId, importerMap, resolveRecords, context);
-		trace = getTrace(moduleId, importerMap);
-	}
-
-	if (trace.length > 1) {
-		setImportTrace(error, trace);
+		// A chain that does not reach an entry module would look complete but
+		// start in the middle, so report none rather than a misleading one
+		if (trace.length > 1 && graph.entryIds.has(trace[0]!)) {
+			setImportTrace(error, trace);
+			return;
+		}
 	}
 };
