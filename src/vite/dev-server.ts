@@ -1,5 +1,5 @@
 import { attempt } from '../utils/attempt.ts';
-import { walkImporters } from '../utils/walk-importers.ts';
+import { findPathToRoot } from '../utils/find-path-to-root.ts';
 import { getErrorFiles } from '../get-error-file.ts';
 import { setImportTrace, type RollupErrorWithTrace } from '../patch-error.ts';
 
@@ -33,13 +33,16 @@ export type ViteDevServer = {
 	};
 };
 
-// Follow each module's first importer that Vite has identified
+// The shortest chain from a module that nothing imports. Following only the
+// first importer is not enough: Vite re-adds an importer when an edit restores
+// its import, so the first one can be part of a cycle, and the chain would
+// start in the middle of it.
 const getViteTrace = (module_: ViteModule | undefined) => (
 	module_?.id
-		? walkImporters(module_, (node) => {
-			const importer = node.importers.values().next().value;
-			return importer?.id ? importer : undefined;
-		}).map(node => node.id!)
+		? findPathToRoot(
+			module_,
+			node => [...node.importers].filter(importer => importer.id),
+		)?.map(node => node.id!) ?? []
 		: []
 );
 

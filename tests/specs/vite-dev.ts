@@ -50,6 +50,50 @@ describe('Vite dev', () => {
 		);
 	}, timeout);
 
+	// Vite deletes an importer when an edit removes its import and adds it
+	// back at the end when the import returns, so a.js's first importer
+	// becomes b.js, which a.js imports in turn
+	test('trace starts at the root after an edit reorders importers', async ({ signal }) => {
+		await using fixture = await createFixture({
+			'index.js': 'import "./a.js";',
+			'a.js': 'import "./b.js"; import "./broken.js";',
+			'b.js': 'import "./a.js";',
+			'broken.js': 'export const value = 1;',
+			'other.js': 'export {};',
+		});
+		await using dev = await viteServe(fixture.path, { plugins: [importTrace()] });
+		const request = async (file: string) => {
+			const response = await fetch(`${dev.url}/${file}`, { signal });
+			return response.status;
+		};
+
+		// Watching is disabled, so each edit invalidates its module directly
+		const { moduleGraph } = dev.server;
+		const edit = async (file: string, code: string) => {
+			await fixture.writeFile(file, code);
+			moduleGraph.invalidateModule(moduleGraph.getModuleById(fixture.getPath(file))!);
+		};
+
+		for (const file of ['index.js', 'a.js', 'b.js', 'broken.js']) {
+			expect(await request(file)).toBe(200);
+		}
+
+		// An import that remains keeps Vite from skipping the graph update
+		await edit('index.js', 'import "./other.js";');
+		expect(await request('index.js')).toBe(200);
+		await edit('index.js', 'import "./a.js";');
+		expect(await request('index.js')).toBe(200);
+
+		await edit('broken.js', 'export const value = "unclosed');
+		expect(await request('broken.js')).toBe(500);
+
+		const requestErrors = dev.errors.filter(message => message.startsWith('Internal server error'));
+		expect(requestErrors).toHaveLength(1);
+		expect(requestErrors[0]).toContain(
+			formatTrace(fixture, ['index.js', 'a.js', 'broken.js']),
+		);
+	}, timeout);
+
 	test('no trace for a module without importers', async ({ signal }) => {
 		await using fixture = await createFixture({
 			'broken.js': 'export const value = "unclosed',
