@@ -1,6 +1,6 @@
 import { describe, test } from 'manten';
 import { createFixture } from 'fs-fixture';
-import { getBuildError, expectTrace, expectNoTrace } from '../utils/trace.ts';
+import { getBuildError, expectTrace } from '../utils/trace.ts';
 import { viteBuild, viteServe } from '../utils/vite.ts';
 import { importTrace } from '../../src/index.ts';
 
@@ -136,10 +136,9 @@ describe('Vite build', () => {
 		]);
 	});
 
-	// Vite drops more import edges than plain Rollup, and replay can recover
-	// only part of this chain. A trace must start at an entry module, so the
-	// partial chain from the package entry is not reported.
-	test('no partial trace when the chain cannot reach the entry', async () => {
+	// Vite drops the edge into the package too. Replaying the package import
+	// fails again with an error that names the package entry, which recovers it.
+	test('syntax error in a CommonJS require chain', async () => {
 		await using fixture = await createFixture({
 			'index.js': 'import lib from "some-lib"; console.log(lib);',
 			'node_modules/some-lib': {
@@ -156,6 +155,10 @@ describe('Vite build', () => {
 			plugins: [importTrace()],
 		}));
 
-		expectNoTrace(error);
+		expectTrace(error, fixture, [
+			'index.js',
+			'node_modules/some-lib/index.js',
+			'node_modules/some-lib/broken.js',
+		]);
 	});
 });

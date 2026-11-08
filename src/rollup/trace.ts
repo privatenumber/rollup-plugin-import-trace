@@ -1,6 +1,7 @@
 import type { PluginContext, RollupError } from 'rollup';
 import { attempt } from '../utils/attempt.ts';
 import { normalizePath } from '../utils/normalize-path.ts';
+import { createTimeout } from '../utils/timeout.ts';
 import { walkImporters } from '../utils/walk-importers.ts';
 import { getErrorFiles } from '../get-error-file.ts';
 import { setImportTrace } from '../patch-error.ts';
@@ -35,6 +36,10 @@ const readModuleGraph = (context: PluginContext) => {
 	};
 };
 
+// A scan of every record took about 3.5s in a failed 5,000-module build
+// (notes/rollup-plugin-import-trace/replay.md)
+const replayTimeLimit = 5000;
+
 const getTrace = (
 	moduleId: string,
 	importerMap: Map<string, string>,
@@ -54,12 +59,21 @@ const recoverTrace = async (
 	resolveRecords: ResolveRecord[],
 	context: PluginContext,
 ) => {
+	// The original error reaches the caller only after recovery, so recovery
+	// gets a time budget
+	const timeout = createTimeout(replayTimeLimit);
 	let trace = getTrace(moduleId, importerMap);
 	while (!entryIds.has(trace[0]!)) {
 		const { length } = trace;
-		await replayResolveRecords(trace[0]!, importerMap, resolveRecords, context);
+		const finished = await replayResolveRecords(
+			trace[0]!,
+			importerMap,
+			resolveRecords,
+			context,
+			timeout,
+		);
 		trace = getTrace(moduleId, importerMap);
-		if (trace.length === length) {
+		if (!finished || trace.length === length) {
 			break;
 		}
 	}
