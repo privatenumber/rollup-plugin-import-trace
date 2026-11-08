@@ -13,16 +13,10 @@ export type ResolveRecord = [
 	options: Parameters<PluginContext['resolve']>[2],
 ];
 
-// Extract subpath from an import specifier for fuzzy matching.
-// Relative: ./protos/a/b.ts → protos/a/b.ts
-// Scoped bare: @scope/pkg/a/b.ts → a/b.ts
-// Bare: pkg/a/b.ts → a/b.ts
+// Extract the subpath from a bare specifier for fuzzy matching.
+// Scoped: @scope/pkg/a/b.ts → a/b.ts
+// Unscoped: pkg/a/b.ts → a/b.ts
 const getSubpath = (source: string): string | undefined => {
-	if (source.startsWith('.')) {
-		// Only ./relative paths produce usable subpaths.
-		// ../traversals can't match absolute moduleId paths.
-		return source.startsWith('./') ? source.slice(2) : undefined;
-	}
 	if (source.startsWith('@')) {
 		const secondSlash = source.indexOf('/', source.indexOf('/') + 1);
 		return secondSlash === -1 ? undefined : source.slice(secondSlash + 1);
@@ -31,17 +25,36 @@ const getSubpath = (source: string): string | undefined => {
 	return firstSlash === -1 ? undefined : source.slice(firstSlash + 1);
 };
 
+// A specifier can leave out the extension or an index file
+// (e.g. "deep/types" for "deep/types.d.ts")
+const omittedSuffix = /^(?:\/index)?\.[^/]+$/;
+
 // Whether a specifier whose resolution threw refers to moduleId.
 // @rollup/plugin-commonjs also resolves modules by absolute path, which must
 // match exactly. Both path styles are checked, so the result does not depend
 // on the OS the build runs on.
-const matchesModule = (source: string, moduleId: string) => {
+const matchesModule = (
+	source: string,
+	importer: string,
+	moduleId: string,
+) => {
 	if (path.posix.isAbsolute(source) || path.win32.isAbsolute(source)) {
 		return normalizePath(source) === moduleId;
 	}
 
+	// A relative specifier refers to a path next to its importer. Matching
+	// only its end would also accept another importer's module with the
+	// same relative path, when several resolutions fail at once.
+	if (/^\.\.?(?:\/|$)/.test(source)) {
+		const target = path.posix.join(path.posix.dirname(normalizePath(importer)), source);
+		return moduleId.startsWith(target) && (
+			moduleId.length === target.length
+			|| omittedSuffix.test(moduleId.slice(target.length))
+		);
+	}
+
 	// Slash-prefixed includes() respects path boundaries while still
-	// tolerating extension mismatches (e.g. "deep/types" vs "deep/types.d.ts")
+	// tolerating extension mismatches
 	const subpath = getSubpath(source);
 	return subpath !== undefined && moduleId.includes(`/${subpath}`);
 };
@@ -52,10 +65,12 @@ const matchesModule = (source: string, moduleId: string) => {
  * return only passes to the next plugin), so the module graph cannot reach the
  * failing module. Adds the recovered edge to `importerMap`.
  *
- * Records are replayed newest first. The failed resolution stops the build,
- * so it is among the last ones recorded, and each replay runs the whole
- * resolveId chain again. Replaying oldest first re-resolved every import in
- * the build before reaching it.
+ * Records are replayed newest first, because each one runs the other plugins'
+ * resolveId hooks again, until one returns a result. A failed resolution
+ * usually stops the build soon after it is recorded, so it tends to be among
+ * the last records. Replay still visits every record when the failing one is
+ * old, such as a resolution that waited while many others completed, or when
+ * no record matches.
  */
 export const replayResolveRecords = async (
 	moduleId: string,
@@ -78,7 +93,7 @@ export const replayResolveRecords = async (
 				}
 			}
 		} catch {
-			if (matchesModule(source, moduleId)) {
+			if (matchesModule(source, importer, moduleId)) {
 				importerMap.set(moduleId, normalizedImporter);
 			}
 		}

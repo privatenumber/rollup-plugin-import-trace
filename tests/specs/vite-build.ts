@@ -107,6 +107,35 @@ describe('Vite build', () => {
 		]);
 	});
 
+	// Replay matches a relative specifier against its importer's directory,
+	// so a ../ import recovers the edge too
+	test('syntax error reached through a ../ import in node_modules', async () => {
+		await using fixture = await createFixture({
+			'index.js': 'export { value } from "./a.js"',
+			'a.js': 'export { value } from "some-lib"',
+			'node_modules/some-lib': {
+				'package.json': JSON.stringify({
+					name: 'some-lib',
+					type: 'module',
+					exports: './src/index.js',
+				}),
+				'src/index.js': 'export { value } from "../broken.js"',
+				'broken.js': 'export const value = "unclosed',
+			},
+		});
+
+		const error = await getBuildError(() => viteBuild(fixture.path, {
+			plugins: [importTrace()],
+		}));
+
+		expectTrace(error, fixture, [
+			'index.js',
+			'a.js',
+			'node_modules/some-lib/src/index.js',
+			'node_modules/some-lib/broken.js',
+		]);
+	});
+
 	// Vite drops more import edges than plain Rollup, and replay can recover
 	// only part of this chain. A trace must start at an entry module, so the
 	// partial chain from the package entry is not reported.

@@ -313,6 +313,68 @@ describe('Rollup', () => {
 			expectNoTrace(error);
 		});
 
+		// a/index.js resolves first but fails last, so its record is not the
+		// newest. b/index.js's import has the same specifier, so matching the
+		// specifier's subpath alone would attach b/index.js as the importer.
+		// b/index.js loads only after a/index.js's import has been recorded.
+		test('concurrent failures with the same specifier', async () => {
+			await using fixture = await createFixture({
+				'index.js': 'import "./a/index.js"; import "./b/index.js";',
+				'a/index.js': 'import "./deep/module.js";',
+				'b/index.js': 'import "./deep/module.js";',
+			});
+			const failingModule = fixture.getPath('a/deep/module.js');
+
+			let markAResolving!: () => void;
+			const aResolving = new Promise<void>((resolve) => {
+				markAResolving = resolve;
+			});
+			let markBResolving!: () => void;
+			const bResolving = new Promise<void>((resolve) => {
+				markBResolving = resolve;
+			});
+			let aFailed!: () => void;
+			const aFailure = new Promise<void>((resolve) => {
+				aFailed = resolve;
+			});
+			let bCalls = 0;
+			const error = await getBuildError(() => rollup({
+				input: fixture.getPath('index.js'),
+				plugins: [
+					importTrace(),
+					{
+						name: 'concurrent-resolver',
+						resolveId: async (source, importer) => {
+							if (source !== './deep/module.js' || !importer) {
+								return null;
+							}
+							if (importer === fixture.getPath('a/index.js')) {
+								markAResolving();
+								await bResolving;
+								aFailed();
+								throw Object.assign(new Error('ENOENT'), { path: failingModule });
+							}
+							bCalls += 1;
+							if (bCalls === 1) {
+								markBResolving();
+								await aFailure;
+								return null;
+							}
+							throw Object.assign(new Error('ENOENT'), { path: fixture.getPath('b/deep/module.js') });
+						},
+						load: async (id) => {
+							if (id === fixture.getPath('b/index.js')) {
+								await aResolving;
+							}
+							return null;
+						},
+					},
+				],
+			}));
+
+			expectTrace(error, fixture, ['index.js', 'a/index.js', 'a/deep/module.js']);
+		});
+
 		test('the plugin is listed after the throwing resolver', async () => {
 			await using fixture = await createFixture({
 				'index.js': 'export { value } from "./a.js"',
