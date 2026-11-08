@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { describe, test, expect } from 'manten';
 import spawn from 'nano-spawn';
@@ -10,6 +11,21 @@ import { formatTrace } from '../utils/trace.ts';
  */
 const projectRoot = path.resolve(import.meta.dirname, '../..');
 const nodeModulesPath = path.join(projectRoot, 'node_modules');
+
+// The CI job for the oldest supported Node.js builds with the pinned version
+// and runs the built package with this binary
+const packageNode = process.env.PACKAGE_TEST_NODE || process.execPath;
+
+const require = createRequire(import.meta.url);
+type RollupModule = { VERSION: string };
+const getMajor = (rollup: RollupModule) => rollup.VERSION.split('.', 1)[0];
+
+// Vite types its plugins against the Rollup it depends on. When the installed
+// Rollup is another major, as in the CI job for Rollup 3, the plugin's Rollup
+// types cannot match Vite's, as for any Rollup plugin.
+const viteUsesInstalledRollup = getMajor(require('rollup') as RollupModule) === getMajor(
+	createRequire(require.resolve('vite/package.json'))('rollup') as RollupModule,
+);
 
 const linkDependencies = (names: string[]): FileTree => {
 	const links: FileTree = {
@@ -52,14 +68,16 @@ describe('Package', () => {
 				// Accepts unknown
 				patchErrorWithTrace(null);
 			`,
-			'vite.config.ts': `
-				import { defineConfig } from 'vite';
-				import { importTrace } from 'rollup-plugin-import-trace';
+			...(viteUsesInstalledRollup && {
+				'vite.config.ts': `
+					import { defineConfig } from 'vite';
+					import { importTrace } from 'rollup-plugin-import-trace';
 
-				export default defineConfig({
-					plugins: [importTrace()],
-				});
-			`,
+					export default defineConfig({
+						plugins: [importTrace()],
+					});
+				`,
+			}),
 			node_modules: linkDependencies(['rollup', 'vite']),
 		});
 
@@ -130,7 +148,7 @@ describe('Package', () => {
 				node_modules: linkDependencies(['rollup']),
 			});
 
-			const { stdout } = await spawn(process.execPath, [file], { cwd: fixture.path });
+			const { stdout } = await spawn(packageNode, [file], { cwd: fixture.path });
 			const { importTrace, inspected } = JSON.parse(stdout);
 			expect(importTrace).toStrictEqual([
 				fixture.getPath('index.js'),

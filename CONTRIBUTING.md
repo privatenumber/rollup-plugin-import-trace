@@ -48,6 +48,8 @@ src/
 
 Tests in `tests/specs/` are grouped by behavior: Rollup builds, Vite builds, the Vite dev server, `patchErrorWithTrace`, and the published `dist/` entry points. They use [fs-fixture](https://github.com/privatenumber/fs-fixture) for files and assert complete traces. See [notes/rollup-plugin-import-trace/testing.md](./notes/rollup-plugin-import-trace/testing.md).
 
+CI runs the suite on Ubuntu and Windows with the newest peers. A compatibility job also runs it with each oldest supported peer (Rollup 3, Vite 5, Vite 6), and runs the built package on Node.js 20, the `engines` floor. To reproduce the Node.js 20 run locally, set `PACKAGE_TEST_NODE` to a Node.js 20 binary.
+
 ## Guidelines
 
 - Add a test that fails without your change, through the real Rollup or Vite boundary when possible.
