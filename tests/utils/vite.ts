@@ -56,10 +56,9 @@ export const createViteHelpers = (vite: Vite) => {
 			envFile: false,
 			customLogger: logger,
 			server: {
-				// `localhost` can resolve to both ::1 and 127.0.0.1. Node.js then
-				// tries each with a 250ms timeout, which concurrent tests can
-				// exceed, so fetch() fails with ETIMEDOUT. An IP address gives
-				// the URL a single address.
+				// With a host name such as `localhost`, Node.js tries each address
+				// it resolves to, and a CI run failed requests with ETIMEDOUT from
+				// that address selection. An IP address skips it.
 				host: '127.0.0.1',
 				port: 0,
 				// Disable file watching to allow clean process exit

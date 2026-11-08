@@ -46,7 +46,8 @@ jobs:
         run: pnpm test
 
       # The oldest Node.js in engines. It cannot strip TypeScript types, so tsx
-      # runs the suite, against the dist/ that the previous step built.
+      # runs the suite. The package specs run the dist/ that the previous step
+      # built; the other specs import src/.
       - name: Test on Node.js 20.20.0
         if: runner.os == 'Linux'
         run: pnpm dlx node@20.20.0 --import tsx tests/index.ts
