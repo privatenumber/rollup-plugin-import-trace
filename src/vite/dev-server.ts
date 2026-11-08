@@ -1,5 +1,5 @@
 import { attempt } from '../utils/attempt.ts';
-import { walkImporters } from '../utils/walk-importers.ts';
+import { findPathToRoot } from '../utils/find-path-to-root.ts';
 import { getErrorFiles } from '../get-error-file.ts';
 import { setImportTrace, type RollupErrorWithTrace } from '../patch-error.ts';
 
@@ -9,6 +9,7 @@ import { setImportTrace, type RollupErrorWithTrace } from '../patch-error.ts';
 type ViteModule = {
 	id: string | null;
 	importers: Set<ViteModule>;
+	clientImportedModules: Set<ViteModule>;
 };
 
 /**
@@ -33,13 +34,22 @@ export type ViteDevServer = {
 	};
 };
 
-// Follow each module's first importer that Vite has identified
+// The shortest chain from a module that nothing imports, or that closes an
+// import cycle when every module has an importer. Following only the first
+// importer is not enough: Vite re-adds an importer when an edit restores its
+// import, so the first one can be part of a cycle, and the chain would start
+// in the middle of it.
+// server.moduleGraph merges the client and SSR graphs, and its importers
+// include modules that import the module only in SSR. The middleware handles
+// browser requests, so only client importers are followed.
 const getViteTrace = (module_: ViteModule | undefined) => (
 	module_?.id
-		? walkImporters(module_, (node) => {
-			const importer = node.importers.values().next().value;
-			return importer?.id ? importer : undefined;
-		}).map(node => node.id!)
+		? findPathToRoot(
+			module_,
+			node => [...node.importers].filter(importer => (
+				importer.id && importer.clientImportedModules.has(node)
+			)),
+		).map(node => node.id!)
 		: []
 );
 

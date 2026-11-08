@@ -61,5 +61,5 @@ The Rollup and Vite specs run once per supported major, on the release of each t
 [`notes/`](./notes/README.md) records upstream behavior that the plugin depends on, with sources and experiments:
 
 - Why the trace is also written to `error.stack`: [notes/rollup-plugin-import-trace/error-stack.md](./notes/rollup-plugin-import-trace/error-stack.md)
-- Why the plugin uses `enforce: 'pre'` in Vite, and which import edges replay cannot recover: [notes/vite/plugin-order.md](./notes/vite/plugin-order.md)
+- Why the plugin uses `order: 'pre'` for `resolveId` and `enforce: 'pre'` in Vite, and which import edges replay cannot recover: [notes/vite/plugin-order.md](./notes/vite/plugin-order.md)
 - Why test fixtures need canonical paths on Windows: [notes/vite/dev-server.md](./notes/vite/dev-server.md)

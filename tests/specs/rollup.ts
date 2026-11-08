@@ -209,6 +209,37 @@ export const rollupSpecs = ({ rollup, VERSION }: Rollup) => describe(`Rollup ${V
 			]);
 		});
 
+		// Resolving the package loads it, so the package import is recorded
+		// before every require() inside it. Replaying it fails with an error
+		// that names broken.js, but it imports broken.js through index.js, so
+		// it must not become broken.js's importer.
+		test('CommonJS package with many requires', async () => {
+			const files = Array.from({ length: 20 }, (_, index) => `f${index}.js`);
+			await using fixture = await createFixture({
+				'index.js': 'import lib from "lib"; console.log(lib);',
+				'node_modules/lib': {
+					'package.json': JSON.stringify({
+						name: 'lib',
+						main: 'index.js',
+					}),
+					'index.js': [...files, 'broken.js'].map(file => `require("./${file}");`).join('\n'),
+					...Object.fromEntries(files.map(file => [file, 'module.exports = 1;'])),
+					'broken.js': 'module.exports = "unclosed',
+				},
+			});
+
+			const error = await getBuildError(() => rollup({
+				input: fixture.getPath('index.js'),
+				plugins: [importTrace(), nodeResolve(), commonjs()],
+			}));
+
+			expectTrace(error, fixture, [
+				'index.js',
+				'node_modules/lib/index.js',
+				'node_modules/lib/broken.js',
+			]);
+		});
+
 		// Load errors such as ENOENT have `path` but no `id` or `loc.file`
 		test('load error located by error.path', async () => {
 			await using fixture = await createFixture({
@@ -273,13 +304,364 @@ export const rollupSpecs = ({ rollup, VERSION }: Rollup) => describe(`Rollup ${V
 			expectTrace(error, fixture, ['index.js', 'a.js', 'node_modules/pkg/index.js']);
 		});
 
-		// Re-resolving throws again, so the specifier's subpath is matched against the error path
+		// Each resolver loads its module with its dependencies before it
+		// returns, so the syntax error at the end fails every level, and every
+		// edge in the chain is dropped. The imports are absolute paths, as
+		// @rollup/plugin-commonjs resolves them, so each level is recovered
+		// exactly, but needs another scan of the records. Each record is still
+		// replayed at most once.
+		test('a chain of dropped edges replays each record once', async () => {
+			const depth = 30;
+			await using fixture = await createFixture();
+			const getPath = (level: number) => fixture.getPath(`m${level}.js`);
+			await fixture.writeFile('index.js', `import ${JSON.stringify(getPath(1))};`);
+			for (let level = 1; level < depth; level += 1) {
+				await fixture.writeFile(`m${level}.js`, `import ${JSON.stringify(getPath(level + 1))};`);
+			}
+			await fixture.writeFile(`m${depth}.js`, 'export const value = "unclosed');
+
+			let resolveCalls = 0;
+			const error = await getBuildError(() => rollup({
+				input: fixture.getPath('index.js'),
+				plugins: [
+					importTrace(),
+					{
+						name: 'loading-resolver',
+						async resolveId(source, importer) {
+							if (!importer || !source.startsWith(fixture.path)) {
+								return null;
+							}
+							resolveCalls += 1;
+							// eslint-disable-next-line unicorn/no-this-outside-of-class -- plugin context
+							await this.load({
+								id: source,
+								resolveDependencies: true,
+							});
+							return source;
+						},
+					},
+				],
+			}));
+
+			expectTrace(error, fixture, [
+				'index.js',
+				...Array.from({ length: depth }, (_, index) => `m${index + 1}.js`),
+			]);
+
+			// The build resolves each import once, and replay at most once more
+			expect(resolveCalls).toBeLessThanOrEqual(depth * 2);
+		});
+
+		// Replay must resolve with the original options. Without the import
+		// attribute, this resolver returns the failing module for a.js's import,
+		// which would report an edge that the build never had. a.js loads after
+		// b.js's import is recorded, so replay reaches a.js's import first.
+		test('replay keeps import attributes', async () => {
+			await using fixture = await createFixture({
+				'index.js': 'import "./a.js"; import "./b.js";',
+				'a.js': 'import data from "./data" with { type: "json" }; console.log(data);',
+				'b.js': 'import "pkg";',
+			});
+			const failingModule = fixture.getPath('node_modules/pkg/index.js');
+
+			let markPkgResolving!: () => void;
+			const pkgResolving = new Promise<void>((resolve) => {
+				markPkgResolving = resolve;
+			});
+			let markDataResolved!: () => void;
+			const dataResolved = new Promise<void>((resolve) => {
+				markDataResolved = resolve;
+			});
+			const error = await getBuildError(() => rollup({
+				input: fixture.getPath('index.js'),
+				plugins: [
+					importTrace(),
+					{
+						name: 'attribute-resolver',
+						resolveId: async (source, _importer, options) => {
+							if (source === './data') {
+								markDataResolved();
+
+								// Rollup 3 passes import attributes as assertions
+								const { attributes, assertions } = options as typeof options & {
+									assertions?: Record<string, string>;
+								};
+								const { type } = attributes ?? assertions ?? {};
+								return type === 'json' ? '\0data' : failingModule;
+							}
+							if (source === 'pkg') {
+								markPkgResolving();
+								await dataResolved;
+								throw Object.assign(new Error('ENOENT'), { path: failingModule });
+							}
+							return null;
+						},
+						load: async (id) => {
+							if (id === fixture.getPath('a.js')) {
+								await pkgResolving;
+							}
+							return id === '\0data' ? 'export default 1;' : null;
+						},
+					},
+				],
+			}));
+
+			expectTrace(error, fixture, ['index.js', 'b.js', 'node_modules/pkg/index.js']);
+		});
+
+		// a/index.js resolves first but fails first, so its record is not the
+		// newest. b/index.js's import has the same specifier and fails too, so
+		// matching the specifier against the path would attach b/index.js as
+		// the importer. Its replayed error names b/deep/module.js instead.
+		// b/index.js loads only after a/index.js's import has been recorded.
+		test('concurrent failures with the same specifier', async () => {
+			await using fixture = await createFixture({
+				'index.js': 'import "./a/index.js"; import "./b/index.js";',
+				'a/index.js': 'import "./deep/module.js";',
+				'b/index.js': 'import "./deep/module.js";',
+			});
+			const failingModule = fixture.getPath('a/deep/module.js');
+
+			let markAResolving!: () => void;
+			const aResolving = new Promise<void>((resolve) => {
+				markAResolving = resolve;
+			});
+			let markBResolving!: () => void;
+			const bResolving = new Promise<void>((resolve) => {
+				markBResolving = resolve;
+			});
+			let aFailed!: () => void;
+			const aFailure = new Promise<void>((resolve) => {
+				aFailed = resolve;
+			});
+			const error = await getBuildError(() => rollup({
+				input: fixture.getPath('index.js'),
+				plugins: [
+					importTrace(),
+					{
+						name: 'concurrent-resolver',
+						resolveId: async (source, importer) => {
+							if (source !== './deep/module.js' || !importer) {
+								return null;
+							}
+							if (importer === fixture.getPath('a/index.js')) {
+								markAResolving();
+								await bResolving;
+								aFailed();
+								throw Object.assign(new Error('ENOENT'), { path: failingModule });
+							}
+							// b/index.js's import fails too, after a/index.js's error has
+							// already failed the build
+							markBResolving();
+							await aFailure;
+							throw Object.assign(new Error('ENOENT'), { path: fixture.getPath('b/deep/module.js') });
+						},
+						load: async (id) => {
+							if (id === fixture.getPath('b/index.js')) {
+								await aResolving;
+							}
+							return null;
+						},
+					},
+				],
+			}));
+
+			expectTrace(error, fixture, ['index.js', 'a/index.js', 'a/deep/module.js']);
+		});
+
+		// The resolver loads the package with its dependencies and then rejects
+		// it, so Rollup drops the edge into the package but keeps the package's
+		// own edges. Replaying the import fails with an error that names no
+		// file, so the edge into the package cannot be recovered, and the
+		// partial chain from the package entry is not reported.
+		test('no partial trace when the chain cannot reach the entry', async () => {
+			await using fixture = await createFixture({
+				'index.js': 'import "lib";',
+				'node_modules/lib/index.js': 'import "./dep.js";',
+				'node_modules/lib/dep.js': 'export const value = 1;',
+			});
+			const packageEntry = fixture.getPath('node_modules/lib/index.js');
+
+			let calls = 0;
+			const error = await getBuildError(() => rollup({
+				input: fixture.getPath('index.js'),
+				plugins: [
+					importTrace(),
+					{
+						name: 'rejecting-resolver',
+						async resolveId(source) {
+							if (source !== 'lib') {
+								return null;
+							}
+							calls += 1;
+							if (calls > 1) {
+								throw new Error('Replay fails differently');
+							}
+							// eslint-disable-next-line unicorn/no-this-outside-of-class -- plugin context
+							await this.load({
+								id: packageEntry,
+								resolveDependencies: true,
+							});
+							throw Object.assign(new Error('Unsupported dependency'), {
+								path: fixture.getPath('node_modules/lib/dep.js'),
+							});
+						},
+					},
+				],
+			}));
+
+			expect(error.message).toMatch('Unsupported dependency');
+			expectNoTrace(error);
+		});
+
+		// The package's own import fails with an error whose id is the package.
+		// Replaying that import names the package as the error's file, but the
+		// package does not import itself, so the edge must come from the import
+		// of the package.
+		test('an error that names its importer', async () => {
+			await using fixture = await createFixture({
+				'pkg.js': 'import "./dep.js";',
+			});
+			const packagePath = fixture.getPath('pkg.js');
+			const entry = `import ${JSON.stringify(packagePath)};`;
+
+			const error = await getBuildError(() => rollup({
+				input: 'entry',
+				plugins: [
+					importTrace(),
+					{
+						name: 'loading-resolver',
+						async resolveId(source) {
+							if (source === 'entry') {
+								return source;
+							}
+							if (source === packagePath) {
+								// eslint-disable-next-line unicorn/no-this-outside-of-class -- plugin context
+								await this.load({
+									id: packagePath,
+									resolveDependencies: true,
+								});
+								return packagePath;
+							}
+							if (source === './dep.js') {
+								throw Object.assign(new Error('Unsupported import'), { id: packagePath });
+							}
+							return null;
+						},
+						load: id => (id === 'entry' ? entry : null),
+					},
+				],
+			}));
+
+			expect(error.importTrace).toStrictEqual(['entry', packagePath.replaceAll('\\', '/')]);
+		});
+
+		// Replay runs resolvers after the build has failed, and one may never
+		// settle. The original error still reaches the caller, without a trace.
+		// The error names two files, which share one time budget.
+		test('a resolver that never settles on replay', async () => {
+			await using fixture = await createFixture({
+				'index.js': 'import "./a.js";',
+				'a.js': 'import "pkg";',
+			});
+
+			let calls = 0;
+			const startedAt = performance.now();
+			const error = await getBuildError(() => rollup({
+				input: fixture.getPath('index.js'),
+				plugins: [
+					importTrace(),
+					{
+						name: 'hanging-resolver',
+						resolveId: (source) => {
+							if (source !== 'pkg') {
+								return null;
+							}
+							calls += 1;
+							if (calls === 1) {
+								throw Object.assign(new Error('original'), {
+									path: fixture.getPath('node_modules/pkg/index.js'),
+									loc: {
+										file: fixture.getPath('node_modules/pkg/src/index.js'),
+										line: 1,
+										column: 0,
+									},
+								});
+							}
+							return new Promise<never>(() => {});
+						},
+					},
+				],
+			}));
+
+			expect(error.message).toMatch('original');
+			expectNoTrace(error);
+			expect(performance.now() - startedAt).toBeLessThan(8000);
+		}, 15_000);
+
+		test('the plugin is listed after the throwing resolver', async () => {
+			await using fixture = await createFixture({
+				'index.js': 'export { value } from "./a.js"',
+				'a.js': 'export { value } from "pkg/deep/module.js"',
+			});
+
+			const error = await getBuildError(() => rollup({
+				input: fixture.getPath('index.js'),
+				plugins: [
+					throwingResolver('pkg/deep/module.js', fixture.getPath('node_modules/pkg/deep/module.js')),
+					importTrace(),
+				],
+			}));
+
+			expectTrace(error, fixture, ['index.js', 'a.js', 'node_modules/pkg/deep/module.js']);
+		});
+
+		// Each replayed record runs the whole resolveId chain again, so replay
+		// must not re-resolve every import in the build
+		test('replay does not re-resolve every import', async () => {
+			const moduleCount = 50;
+			const files: Record<string, string> = {
+				'index.js': Array.from({ length: moduleCount }, (_, index) => `import "./m${index}.js";`).join('\n'),
+			};
+			for (let index = 0; index < moduleCount; index += 1) {
+				files[`m${index}.js`] = index === moduleCount - 1 ? 'import "pkg/deep/module.js";' : 'export {};';
+			}
+			await using fixture = await createFixture(files);
+
+			let resolveCalls = 0;
+			const error = await getBuildError(() => rollup({
+				input: fixture.getPath('index.js'),
+				plugins: [
+					importTrace(),
+					{
+						name: 'counter',
+						resolveId: () => {
+							resolveCalls += 1;
+							return null;
+						},
+					},
+					throwingResolver('pkg/deep/module.js', fixture.getPath('node_modules/pkg/deep/module.js')),
+				],
+			}));
+
+			expectTrace(error, fixture, [
+				'index.js',
+				`m${moduleCount - 1}.js`,
+				'node_modules/pkg/deep/module.js',
+			]);
+
+			// The build itself resolves the entry and each import once. Replaying
+			// every record would double that.
+			expect(resolveCalls).toBeLessThan((moduleCount + 2) * 1.5);
+		});
+
+		// Re-resolving throws again, with an error that names the module
 		for (const [specifier, errorFile] of [
 			['./deep/module.js', 'deep/module.js'],
 			['pkg/deep/module.js', 'node_modules/pkg/deep/module.js'],
 			['@scope/pkg/deep/module.js', 'node_modules/@scope/pkg/deep/module.js'],
 		]) {
-			test(`subpath fallback for ${specifier}`, async () => {
+			test(`replayed error names the module: ${specifier}`, async () => {
 				await using fixture = await createFixture({
 					'index.js': 'export { value } from "./a.js"',
 					'a.js': `export { value } from "${specifier}"`,
