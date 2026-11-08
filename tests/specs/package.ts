@@ -11,10 +11,6 @@ import { formatTrace } from '../utils/trace.ts';
 const projectRoot = path.resolve(import.meta.dirname, '../..');
 const nodeModulesPath = path.join(projectRoot, 'node_modules');
 
-// CI builds and tests with the pinned Node.js, and runs the built package
-// with the oldest supported Node.js through this variable
-const packageNode = process.env.PACKAGE_TEST_NODE || process.execPath;
-
 const linkDependencies = (names: string[]): FileTree => {
 	const links: FileTree = {
 		'rollup-plugin-import-trace': ({ symlink }) => symlink(projectRoot),
@@ -134,7 +130,7 @@ describe('Package', () => {
 				node_modules: linkDependencies(['rollup']),
 			});
 
-			const { stdout } = await spawn(packageNode, [file], { cwd: fixture.path });
+			const { stdout } = await spawn(process.execPath, [file], { cwd: fixture.path });
 			const { importTrace, inspected } = JSON.parse(stdout);
 			expect(importTrace).toStrictEqual([
 				fixture.getPath('index.js'),
