@@ -24,6 +24,10 @@ Rejected: parsing the error HTML in the 500 response. The test extracted `const 
 
 Vite also logs a `Pre-transform error` for the same syntax error, without a trace. The plugin does not trace pre-transform errors today.
 
+## Dev servers listen on 127.0.0.1
+
+The dev server helper sets `server.host: '127.0.0.1'` ([`tests/utils/vite.ts`](../../tests/utils/vite.ts)). With the default host, Vite 5, 6, and 7 all report `http://localhost:<port>/` and listen on one address (`::1` on macOS, observed 2026-11-08). On a runner where `localhost` resolves to both `::1` and `127.0.0.1`, Node.js `fetch()` tries each address with a 250ms timeout per attempt (`net.getDefaultAutoSelectFamilyAttemptTimeout()` on Node.js 20.20.0). In CI, the Node.js 20.20.0 run of 89 concurrent tests failed two Vite 5 dev requests with `TypeError: fetch failed`, caused by `AggregateError [ETIMEDOUT]` from `internalConnectMultiple` ([job 128604241431](https://github.com/privatenumber/rollup-plugin-import-trace/actions/runs/42439087815/job/128604241431)). An IP address gives the URL a single address, so the connection does not use the per-attempt timeout. The failure did not reproduce locally on macOS.
+
 ## Published package
 
 [`tests/specs/package.ts`](../../tests/specs/package.ts) imports the package by name from a fixture whose `node_modules` links to the repository, so resolution goes through `package.json#exports` to `dist/`:
