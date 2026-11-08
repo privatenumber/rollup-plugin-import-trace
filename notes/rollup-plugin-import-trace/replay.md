@@ -16,7 +16,9 @@ The plugin records each `resolveId` call it sees, with its options, from `buildS
 
 Records are in the order the resolutions started, and replay alternates between the newest and the oldest. A nested resolution starts after the one that contains it, so among the records whose error names the module, the newest is the most direct import. Only the newest end accepts rule 3 at once. The oldest end accepts rules 1 and 2, and keeps a rule 3 match as a fallback.
 
-A trace that does not start at an entry module is not reported. Replay runs third-party resolvers after the build has failed, and one may never settle, so recovery has a 5-second budget. When it runs out, the error has no trace.
+Each record is resolved at most once per error, and its outcome is reused for every module the walk reaches. Without that, each recovered level started another scan: a chain of 30 dropped edges replayed nearly every record 30 times. An error whose `id` names the record's own importer is not an edge, because a module does not import itself.
+
+A trace that does not start at an entry module is not reported. Replay runs third-party resolvers after the build has failed, and one may never settle, so recovery of one error has a 5-second budget, shared by all of its files. The deadline's timer keeps the process alive: with an unreferenced timer and no other active handles, Rollup replaced the original error with `Unexpected early exit`. Replay also checks the time between records, because resolvers that settle without yielding to the event loop keep the timer from running. When the budget runs out, the error has no trace.
 
 ## Evidence
 
@@ -49,7 +51,7 @@ Failed builds with N modules imported by the entry, the fastest of 3 runs:
 | No record matches, a full scan | 1,145 ms | 5,180 ms | 3,134 ms, no trace |
 | A CommonJS package with 5,000 internal `require()` calls | 1,277 ms | 2,862 ms | 2,532 ms |
 
-The worst case is one full scan, which `develop` made on most failures. A full scan of 5,000 records took about 2 s, so the budget can cut a scan only in builds that are several times larger.
+The worst case is one full scan per error, which `develop` made on most failures. A full scan of 5,000 records took about 2 s, so the budget can cut a scan only in builds that are several times larger.
 
 ## Rejected alternatives
 
@@ -68,7 +70,10 @@ Bundlers that report an import chain record the importer while they build the mo
 
 ## Known limits
 
-- A stateful resolver can answer differently on replay. Rule 1 then accepts an edge the build never had. Copying the options only at replay time does not protect against a resolver that changed external state.
+- A stateful resolver can answer differently on replay. Rule 1 then accepts an edge the build never had. This includes a resolver that deletes a value from the `options` it received, because the record holds the same object. Copying the options for every import would cost every successful build and still not protect against a resolver that changed external state.
+- Rule 1 also accepts a plugin's `this.resolve()` probe whose result it discarded, because a probe and an import reach `resolveId` the same way. `@rollup/plugin-commonjs` resolves `require()` calls that way, and rule 1 needs them. `develop` accepted these too.
+- A resolver that loads every module with its dependencies before it returns, with relative specifiers, drops every edge in the chain, and every replayed error names only the failing file. Only the last edge is recovered, so the error has no trace. `develop` matched the specifiers' subpaths and reported the chain, but the same matching produced the false traces above. With absolute specifiers, as `@rollup/plugin-commonjs` uses, rule 2 recovers each level ([`tests/specs/rollup.ts`](../../tests/specs/rollup.ts)).
+- A single resolver that blocks the event loop cannot be interrupted, so it can overrun the budget.
 - When several real chains reach the failing module, the trace shows one of them, which may not be the one that failed first.
 - A build that is several times larger than 5,000 modules can exhaust the budget on a full scan and get no trace.
 
