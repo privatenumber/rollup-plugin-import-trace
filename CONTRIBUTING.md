@@ -48,7 +48,7 @@ src/
 
 Tests in `tests/specs/` are grouped by behavior: Rollup builds, Vite builds, the Vite dev server, `patchErrorWithTrace`, and the published `dist/` entry points. They use [fs-fixture](https://github.com/privatenumber/fs-fixture) for files and assert complete traces. See [notes/rollup-plugin-import-trace/testing.md](./notes/rollup-plugin-import-trace/testing.md).
 
-CI runs the suite on Ubuntu and Windows with the newest peers. A compatibility job also runs it with each oldest supported peer (Rollup 3, Vite 5, Vite 6), and runs the built package on Node.js 20, the `engines` floor. To reproduce the Node.js 20 run locally, set `PACKAGE_TEST_NODE` to a Node.js 20 binary.
+The Rollup and Vite specs run once per supported major. The older majors are dev dependencies under aliases (`rollup3`, `vite5`, `vite6`), so `pnpm test` covers every peer version locally and in CI. On Linux, CI also runs the built package with Node.js 20.20.0, the `engines` floor. To run that check locally, set `PACKAGE_TEST_NODE` to a Node.js 20.20.0 binary, for example from `pnpm dlx node@20.20.0 -p process.execPath`. See [notes/rollup-plugin-import-trace/testing.md](./notes/rollup-plugin-import-trace/testing.md#supported-versions).
 
 ## Guidelines
 
