@@ -56,9 +56,9 @@ export const createViteHelpers = (vite: Vite) => {
 			envFile: false,
 			customLogger: logger,
 			server: {
-				// With a host name such as `localhost`, Node.js tries each address
-				// it resolves to, and a CI run failed requests with ETIMEDOUT from
-				// that address selection. An IP address skips it.
+				// With a host name such as `localhost`, Node.js can try several of
+				// the addresses it resolves to, and a CI run failed requests with
+				// ETIMEDOUT from that address selection. An IP address skips it.
 				host: '127.0.0.1',
 				port: 0,
 				// Disable file watching to allow clean process exit
