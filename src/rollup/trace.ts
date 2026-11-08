@@ -36,7 +36,7 @@ const readModuleGraph = (context: PluginContext) => {
 	};
 };
 
-// A scan of every record took about 3.5s in a failed 5,000-module build
+// A scan of every record took about 2s in a failed 5,000-module build
 // (notes/rollup-plugin-import-trace/replay.md)
 const replayTimeLimit = 5000;
 
