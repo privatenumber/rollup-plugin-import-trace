@@ -38,7 +38,9 @@ export default {
 }
 ```
 
-Errors thrown by `rollup()` include the trace, and so do errors from `bundle.generate()` or `bundle.write()` while Rollup renders chunks. Rollup does not let plugins handle errors from the later `generateBundle` and `writeBundle` hooks, so those have no trace.
+An error thrown by `rollup()` gets a trace when the plugin can follow the imports from an entry module to the file that failed. An error in an entry module itself, or one that names no file, has none. The same applies to errors from `bundle.generate()` or `bundle.write()` while Rollup renders chunks. Rollup does not let plugins handle errors from the later `generateBundle` and `writeBundle` hooks, so those have no trace.
+
+The plugin's `resolveId` hook runs before other plugins' hooks wherever it is listed, so it can record imports that a later resolver fails on. The exception is another plugin whose `resolveId` also uses `order: 'pre'`: list `importTrace()` before it.
 
 ```ts
 import { rollup } from 'rollup'
