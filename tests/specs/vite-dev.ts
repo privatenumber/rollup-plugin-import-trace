@@ -135,6 +135,36 @@ export const viteDevSpecs = (vite: Vite) => describe(`Vite ${vite.version.split(
 		]);
 	}, timeout);
 
+	// server.moduleGraph merges the client and SSR importers. server.js
+	// imports broken.js only in SSR, so a browser request must not be traced
+	// through it, although it is the shorter chain.
+	test('browser request is traced through client importers', async ({ signal }) => {
+		await using fixture = await createFixture({
+			'main.js': 'import "./a.js";',
+			'a.js': 'import "./broken.js";',
+			'server.js': 'import "./broken.js";',
+			'broken.js': 'export const value = 1;',
+		});
+		await using dev = await viteServe(fixture.path, { plugins: [importTrace()] });
+		await dev.server.ssrLoadModule('/server.js');
+		for (const file of ['main.js', 'a.js', 'broken.js']) {
+			const response = await fetch(`${dev.url}/${file}`, { signal });
+			expect(response.status).toBe(200);
+		}
+
+		const { moduleGraph } = dev.server;
+		await fixture.writeFile('broken.js', 'export const value = "unclosed');
+		moduleGraph.invalidateModule((await moduleGraph.getModuleByUrl('/broken.js'))!);
+		const response = await fetch(`${dev.url}/broken.js`, { signal });
+		expect(response.status).toBe(500);
+
+		const requestErrors = dev.errors.filter(message => message.startsWith('Internal server error'));
+		expect(requestErrors).toHaveLength(1);
+		expect(requestErrors[0]).toContain(
+			formatTrace(fixture, ['main.js', 'a.js', 'broken.js']),
+		);
+	}, timeout);
+
 	test('no trace for a module without importers', async ({ signal }) => {
 		await using fixture = await createFixture({
 			'broken.js': 'export const value = "unclosed',
