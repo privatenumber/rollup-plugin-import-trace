@@ -1,10 +1,12 @@
 import { describe, test } from 'manten';
 import { createFixture } from 'fs-fixture';
 import { getBuildError, expectTrace } from '../utils/trace.ts';
-import { viteBuild, viteServe } from '../utils/vite.ts';
+import { type Vite, createViteHelpers } from '../utils/vite.ts';
 import { importTrace } from '../../src/index.ts';
 
-describe('Vite build', () => {
+export const viteBuildSpecs = (vite: Vite) => describe(`Vite ${vite.version.split('.', 1)[0]} build`, () => {
+	const { viteBuild, viteServe } = createViteHelpers(vite);
+
 	test('syntax error', async () => {
 		await using fixture = await createFixture({
 			'index.js': 'export { value } from "./a.js"',
