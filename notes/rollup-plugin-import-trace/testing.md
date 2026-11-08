@@ -24,6 +24,10 @@ Rejected: parsing the error HTML in the 500 response. The test extracted `const 
 
 Vite also logs a `Pre-transform error` for the same syntax error, without a trace. The plugin does not trace pre-transform errors today.
 
+## Dev servers listen on 127.0.0.1
+
+The dev server helper sets `server.host: '127.0.0.1'` ([`tests/utils/vite.ts`](../../tests/utils/vite.ts)). In CI, the Node.js 20.20.0 run of 89 concurrent tests failed two Vite 5 dev requests with `TypeError: fetch failed`, caused by `AggregateError [ETIMEDOUT]` with two errors from `internalConnectMultiple` ([job 128604241431](https://github.com/privatenumber/rollup-plugin-import-trace/actions/runs/42439087815/job/128604241431)). `internalConnectMultiple` is Node.js's address selection for a host name that resolves to more than one address. It tries the next address when an attempt fails, and stops at the first connection that succeeds. An attempt that is still pending moves on after a timeout, 250ms by default, unless it is the last address ([Node.js v20.20.0 `lib/net.js#L1194-L1198`](https://github.com/nodejs/node/blob/v20.20.0/lib/net.js#L1194-L1198)). For an IP address, Node.js skips the lookup and the selection ([`lib/net.js#L1323-L1334`](https://github.com/nodejs/node/blob/v20.20.0/lib/net.js#L1323-L1334)), so the fix removes the mechanism that failed. With the default host, Vite 5, 6, and 7 reported `http://localhost:<port>/` and listened on `::1` on macOS (observed 2026-11-08). Vite reports the resolved IP instead when Node.js's DNS order differs from the system order ([Vite v5.4.21 `utils.ts#L900-L910`](https://github.com/vitejs/vite/blob/v5.4.21/packages/vite/src/node/utils.ts#L900-L910)). Evidence gap: the log does not show which address timed out or why, so concurrent load is a hypothesis. The failure did not reproduce locally on macOS.
+
 ## Published package
 
 [`tests/specs/package.ts`](../../tests/specs/package.ts) imports the package by name from a fixture whose `node_modules` links to the repository, so resolution goes through `package.json#exports` to `dist/`:
@@ -35,6 +39,36 @@ Vite also logs a `Pre-transform error` for the same syntax error, without a trac
 All other specs import `src/` directly, so these are the only tests of the published files.
 
 The top-level `types` field points to `dist/index.d.ts`, a third copy of the declarations. TypeScript before 4.7 ignores `exports` and cannot read a `.d.cts` file through `types`. Observed with TypeScript 4.6.4, `module: commonjs`, `moduleResolution: node`, `skipLibCheck: true`, and Rollup 4.67.5: `types: ./dist/index.d.cts` failed with `TS7016`, and `./dist/index.d.ts` passed. `skipLibCheck` is needed because Rollup 4's own declarations use `Symbol.asyncDispose`, which TypeScript 4.6 rejects. The fallback fixes how this package's types resolve, not compatibility with every dependency's types. No test covers this, because it would need an old TypeScript as a dev dependency.
+
+## Supported versions
+
+Decision, 2026-11-08: the suite tests every supported peer major in one run, and CI runs it again on the oldest Node.js in `engines`.
+
+- **Peers:** the older majors are dev dependencies under aliases: `rollup3` (`npm:rollup@^3.30.0`), `vite5`, and `vite6`. [`tests/index.ts`](../../tests/index.ts) passes each module to the Rollup, Vite build, and Vite dev specs, which are factories that take it ([`tests/specs/rollup.ts`](../../tests/specs/rollup.ts), [`tests/utils/vite.ts`](../../tests/utils/vite.ts)). Each alias range starts at the newest release of its major when the alias was added, and the lockfile pins the release CI installs; the other releases of a major are not tested. `node_modules/rollup` and `node_modules/vite` stay the newest majors, so the package type test checks only the newest Rollup and Vite together. This follows [esbuild-loader](https://github.com/privatenumber/esbuild-loader/blob/v4.5.0/tests/index.ts#L1-L19), which installs `webpack5: npm:webpack@^5.0.0` beside webpack 4 and runs its specs once per version.
+- **Node.js:** on Linux, CI runs the whole suite again on Node.js 20.20.0, the `engines` floor, with `pnpm dlx node@20.20.0 --import tsx tests/index.ts` (`tsx` 4.23.15, [`.github/workflows/test.yml`](../../.github/workflows/test.yml)). `pnpm test` runs TypeScript with Node.js type stripping, which needs Node.js 22.18 or newer, so the floor run uses `tsx`. The package specs run the `dist/` that `pnpm test` built in the step before, and the other specs import `src/`. pnpm 11 removed `pnpm run --use-node-version`, which esbuild-loader uses for the same purpose ([pnpm/pnpm#10373](https://github.com/pnpm/pnpm/pull/10373)); `pnpm dlx node@<version>` provisions a runtime for one command instead.
+
+Vite 5–7 type their plugins against their own Rollup 4. A project whose own `rollup` is Rollup 3 therefore cannot type-check this plugin in a Vite config, because the plugin's declared type is Rollup's full `Plugin` type. The same is true for other plugins declared that way, such as `@rollup/plugin-commonjs`.
+
+The Vite build and dev groups run in one process and share `process.env.NODE_ENV`. Vite sets it the first time any config resolves, if it is unset, and every later config reads `isProduction` from it ([Vite v7.3.7 `config.ts#L1067-L1073`](https://github.com/vitejs/vite/blob/v7.3.7/packages/vite/src/node/config.ts#L1067-L1073), [`#L1340`](https://github.com/vitejs/vite/blob/v7.3.7/packages/vite/src/node/config.ts#L1340)). Dev servers can therefore run in production mode, or builds in development mode, depending on which resolves first. Running the groups one after another would not help, because the first value stays. No test depends on the mode today: the plugin does not read it, and no fixture uses `development` or `production` export conditions. A test that does would need its own process.
+
+### Evidence
+
+Measured 2026-11-08 on macOS with Node.js 26.13.0 and pnpm 12.16.1, unless stated otherwise:
+
+- **Coverage:** the alias suite ran 89 tests. Groups were named `Rollup 3`, `Rollup 4`, and `Vite 5`, `Vite 6`, and `Vite 7` for both `build` and `dev`. A plugin's `buildStart` in the `rollup3` module reported `this.meta.rollupVersion` 3.30.0.
+- **Cost:** installing the three aliases took 1s and grew `node_modules/.pnpm` by 25 MB. An emulation of the alias suite ran 98 tests in 1.34–1.42s in the fastest of six alternating runs, against 1.25–1.34s for the 55-test suite. manten runs tests concurrently, so the extra majors add about 0.1s.
+- **Floor releases of the older majors:** with the aliases set to Rollup 3.0.0, Vite 5.0.0, and Vite 6.0.0, all 89 tests passed (one-off check, not in CI).
+- **The floor run uses Node.js 20.20.0.** All 89 tests passed in about 2s with `pnpm dlx node@20.20.0 --import tsx tests/index.ts`. With a Node.js 22-only call (`[1].values().map()`) added to `src/index.ts`, that run failed with `TypeError: [1].values(...).map is not a function`, while `node tests/index.ts` on the pinned Node.js 26.13.0 still passed. Node.js 20.20.0 provides `Symbol.asyncDispose`, which the `await using` statements in the tests need after `tsx` lowers them.
+- **The CI matrix was not slower.** In [run 42432963055](https://github.com/privatenumber/rollup-plugin-import-trace/actions/runs/42432963055) of the earlier matrix (#17 at `10d521b`), each compatibility job took 15–20s and ran in parallel with the main jobs. The run took 47s, set by the Windows job's 42s. Speed did not decide the choice.
+
+### Rejected alternatives
+
+- **Running only the `dist/` tests on Node.js 20,** with a CI step that exported a Node.js 20 binary path as `PACKAGE_TEST_NODE` for [`tests/specs/package.ts`](../../tests/specs/package.ts) to spawn. Replaced, because it checked 2 tests instead of the suite, connected the workflow to the test only through an environment variable, and did not run unless the variable was set.
+- **A CI matrix job per peer version**, which installed the older version in place of the newest and ran `pnpm test`. Rejected, because `pnpm test` did not cover the older versions: each local check needed a manual install and revert. Windows did not test them either. The Vite type test also needed a cross-major skip, because the installed `rollup` was Rollup 3 while Vite used Rollup 4.
+- **A Node.js 20 dev dependency through pnpm's `runtime:` protocol.** With pnpm 12.18.0, `pnpm add -D node20@runtime:20.20.0` failed with `ERR_PNPM_SPEC_NOT_SUPPORTED_BY_ANY_RESOLVER`. `pnpm add -D node@runtime:20.20.0` worked, but linked `node_modules/.bin/node` to 20.20.0, which pnpm scripts find before the pinned runtime, and the TypeScript suite cannot run there.
+- **[`get-node`](https://github.com/ehmicky/get-node) 15.0.4 in the test suite**, to download Node.js 20 during `pnpm test`. It installed 108 packages (14 MB), and the first download took 2.0s and used 91 MB of cache per version. Rejected, because it adds network access to the tests and 108 packages for a check of an end-of-life runtime that CI alone can run. Node.js 20 reached end of life on 2026-04-30 ([endoflife.date](https://endoflife.date/nodejs)).
+
+Revisit when `engines` moves to Node.js 24 or newer, where the floor run can drop `tsx` and run like `pnpm test`, or when a supported peer major is added or dropped. Node.js 22.18 strips types by default but cannot parse the tests' `await using`: Node.js 22.18.0 and 22.22.2 failed with `SyntaxError: Unexpected identifier 'x'` on `{ await using x = r; }`, and Node.js 24.0.0 ran it (2026-11-08).
 
 ## Verifying that a test can fail
 

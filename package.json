@@ -70,8 +70,12 @@
 		"nano-spawn": "^2.1.0",
 		"pkgroll": "^2.29.0",
 		"rollup": "^4.67.5",
+		"rollup3": "npm:rollup@^3.30.0",
+		"tsx": "^4.23.15",
 		"typescript": "^6.0.3",
-		"vite": "^7.3.7"
+		"vite": "^7.3.7",
+		"vite5": "npm:vite@^5.4.21",
+		"vite6": "npm:vite@^6.4.5"
 	},
 	"devEngines": {
 		"runtime": {

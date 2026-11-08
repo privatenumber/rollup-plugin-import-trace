@@ -48,6 +48,8 @@ src/
 
 Tests in `tests/specs/` are grouped by behavior: Rollup builds, Vite builds, the Vite dev server, `patchErrorWithTrace`, and the published `dist/` entry points. They use [fs-fixture](https://github.com/privatenumber/fs-fixture) for files and assert complete traces. See [notes/rollup-plugin-import-trace/testing.md](./notes/rollup-plugin-import-trace/testing.md).
 
+The Rollup and Vite specs run once per supported major, on the release of each that the lockfile pins. The older majors are dev dependencies under aliases (`rollup3`, `vite5`, `vite6`), so `pnpm test` covers every supported major locally and in CI. On Linux, CI also runs the suite on Node.js 20.20.0, the `engines` floor, through `tsx`. To run it locally after `pnpm test` has built `dist/`: `pnpm dlx node@20.20.0 --import tsx tests/index.ts`. See [notes/rollup-plugin-import-trace/testing.md](./notes/rollup-plugin-import-trace/testing.md#supported-versions).
+
 ## Guidelines
 
 - Add a test that fails without your change, through the real Rollup or Vite boundary when possible.

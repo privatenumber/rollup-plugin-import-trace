@@ -2,13 +2,15 @@ import { describe, test, expect } from 'manten';
 import type { PluginContext } from 'rollup';
 import { createFixture } from 'fs-fixture';
 import { formatTrace, expectNoTrace } from '../utils/trace.ts';
-import { viteServe } from '../utils/vite.ts';
+import { type Vite, createViteHelpers } from '../utils/vite.ts';
 import { importTrace } from '../../src/index.ts';
 
 // A request that never settles aborts at the timeout, so the server is still disposed
 const timeout = 10_000;
 
-describe('Vite dev', () => {
+export const viteDevSpecs = (vite: Vite) => describe(`Vite ${vite.version.split('.', 1)[0]} dev`, () => {
+	const { viteServe } = createViteHelpers(vite);
+
 	test('serves transformed modules', async ({ signal }) => {
 		await using fixture = await createFixture({
 			'index.js': 'import { value } from "./a.js"; console.log(value);',
