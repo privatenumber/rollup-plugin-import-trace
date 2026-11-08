@@ -361,9 +361,10 @@ export const rollupSpecs = ({ rollup, VERSION }: Rollup) => describe(`Rollup ${V
 			expectTrace(error, fixture, ['index.js', 'b.js', 'node_modules/pkg/index.js']);
 		});
 
-		// a/index.js resolves first but fails last, so its record is not the
-		// newest. b/index.js's import has the same specifier, so matching the
-		// specifier's subpath alone would attach b/index.js as the importer.
+		// a/index.js resolves first but fails first, so its record is not the
+		// newest. b/index.js's import has the same specifier and fails too, so
+		// matching the specifier against the path would attach b/index.js as
+		// the importer. Its replayed error names b/deep/module.js instead.
 		// b/index.js loads only after a/index.js's import has been recorded.
 		test('concurrent failures with the same specifier', async () => {
 			await using fixture = await createFixture({
@@ -556,13 +557,13 @@ export const rollupSpecs = ({ rollup, VERSION }: Rollup) => describe(`Rollup ${V
 			expect(resolveCalls).toBeLessThan((moduleCount + 2) * 1.5);
 		});
 
-		// Re-resolving throws again, so the specifier's subpath is matched against the error path
+		// Re-resolving throws again, with an error that names the module
 		for (const [specifier, errorFile] of [
 			['./deep/module.js', 'deep/module.js'],
 			['pkg/deep/module.js', 'node_modules/pkg/deep/module.js'],
 			['@scope/pkg/deep/module.js', 'node_modules/@scope/pkg/deep/module.js'],
 		]) {
-			test(`subpath fallback for ${specifier}`, async () => {
+			test(`replayed error names the module: ${specifier}`, async () => {
 				await using fixture = await createFixture({
 					'index.js': 'export { value } from "./a.js"',
 					'a.js': `export { value } from "${specifier}"`,
