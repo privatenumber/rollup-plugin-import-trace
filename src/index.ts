@@ -6,6 +6,7 @@ import { addErrorMiddleware, type ViteDevServer } from './vite/dev-server.ts';
 export { patchErrorWithTrace, type RollupErrorWithTrace } from './patch-error.ts';
 
 type RollupVitePlugin = Plugin & {
+	enforce?: 'pre' | 'post';
 	configureServer?: (server: ViteDevServer) => (() => void) | void;
 };
 
@@ -39,7 +40,8 @@ export const importTrace = (): RollupVitePlugin => {
 	// Track resolveId calls to recover relationships that Rollup
 	// hasn't recorded when resolution fails mid-chain.
 	// Replayed sequentially in buildEnd (only on error) with early exit.
-	// Lightweight: two string references per import, cleared each build
+	// Each record holds the specifier, the importer, and the options object
+	// Rollup passed, and the records are cleared after buildEnd.
 	const resolveRecords: ResolveRecord[] = [];
 
 	// A Vite dev server can resolve imports for its whole lifetime without
@@ -51,6 +53,11 @@ export const importTrace = (): RollupVitePlugin => {
 
 	return {
 		name: 'import-trace',
+
+		// Vite runs the configureServer post hooks of enforce: 'pre' plugins
+		// first, so the error middleware attaches the trace before the error
+		// middleware of a normal plugin reads the error. Rollup ignores this.
+		enforce: 'pre',
 
 		// Vite dev: return function to register post-middleware
 		configureServer: (server) => {
@@ -64,8 +71,10 @@ export const importTrace = (): RollupVitePlugin => {
 
 		// Capture every resolution attempt so we can recover
 		// relationships that Rollup drops when resolveId fails mid-chain.
-		// order: 'pre' runs it before other plugins' resolveId hooks, which
-		// may throw, wherever the plugin is listed. In Vite it also runs before
+		// order: 'pre' runs it before every resolveId hook without
+		// order: 'pre', which may throw, wherever the plugin is listed. A
+		// plugin listed earlier whose resolveId also uses order: 'pre' still
+		// runs first. In Vite it also runs before
 		// vite:resolve, which ends the resolveId chain: in builds,
 		// commonjs--resolver resolves imports through that chain and then loads
 		// modules that may be CommonJS, so a syntax error in node_modules can

@@ -95,6 +95,44 @@ describe('Vite dev', () => {
 		);
 	}, timeout);
 
+	// enforce: 'pre' runs the plugin's configureServer post hook, and so its
+	// error middleware, before those of normal plugins listed earlier
+	test('error middleware of an earlier plugin sees the trace', async ({ signal }) => {
+		await using fixture = await createFixture({
+			'index.js': 'import { value } from "./broken.js"; console.log(value);',
+			'broken.js': 'export const value = "unclosed',
+		});
+		const seenTraces: unknown[] = [];
+		const readError = (
+			error: { importTrace?: unknown },
+			_request: unknown,
+			_response: unknown,
+			next: (error: unknown) => void,
+		) => {
+			seenTraces.push(error.importTrace);
+			next(error);
+		};
+		await using dev = await viteServe(fixture.path, {
+			plugins: [
+				{
+					name: 'error-reader',
+					configureServer: server => () => {
+						server.middlewares.use(readError);
+					},
+				},
+				importTrace(),
+			],
+		});
+
+		const entry = await fetch(`${dev.url}/index.js`, { signal });
+		expect(entry.status).toBe(200);
+		const broken = await fetch(`${dev.url}/broken.js`, { signal });
+		expect(broken.status).toBe(500);
+		expect(seenTraces).toStrictEqual([
+			[fixture.getPath('index.js'), fixture.getPath('broken.js')].map(file => file.replaceAll('\\', '/')),
+		]);
+	}, timeout);
+
 	test('no trace for a module without importers', async ({ signal }) => {
 		await using fixture = await createFixture({
 			'broken.js': 'export const value = "unclosed',
