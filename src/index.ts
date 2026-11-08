@@ -51,12 +51,17 @@ export const importTrace = (): RollupVitePlugin => {
 	// recording for a later build that reuses this plugin instance.
 	let isDevServer = false;
 
+	// Records only from buildStart to buildEnd. Another plugin's buildEnd can
+	// still resolve imports, and those records would outlive the build.
+	let isRecording = false;
+
 	return {
 		name: 'import-trace',
 
 		// Vite runs the configureServer post hooks of enforce: 'pre' plugins
 		// first, so the error middleware attaches the trace before the error
-		// middleware of a normal plugin reads the error. Rollup ignores this.
+		// middleware of a normal plugin reads the error. A configureServer hook
+		// with order: 'pre' still runs before it. Rollup ignores this.
 		enforce: 'pre',
 
 		// Vite dev: return function to register post-middleware
@@ -67,6 +72,7 @@ export const importTrace = (): RollupVitePlugin => {
 
 		buildStart: () => {
 			resolveRecords.length = 0;
+			isRecording = !isDevServer;
 		},
 
 		// Capture every resolution attempt so we can recover
@@ -82,7 +88,7 @@ export const importTrace = (): RollupVitePlugin => {
 		resolveId: {
 			order: 'pre',
 			handler: (source, importer, options) => {
-				if (importer && !isDevServer) {
+				if (importer && isRecording) {
 					resolveRecords.push([source, importer, options]);
 				}
 				return null;
@@ -94,6 +100,7 @@ export const importTrace = (): RollupVitePlugin => {
 		},
 
 		async buildEnd(error) {
+			isRecording = false;
 			if (error) {
 				// eslint-disable-next-line unicorn/no-this-outside-of-class -- Rollup passes the plugin context as `this` (https://github.com/pvtnbr/lintroll/issues/48)
 				await attachImportTrace(this, error, resolveRecords);
