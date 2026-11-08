@@ -288,10 +288,16 @@ describe('Rollup', () => {
 					importTrace(),
 					{
 						name: 'attribute-resolver',
-						resolveId: async (source, _importer, { attributes }) => {
+						resolveId: async (source, _importer, options) => {
 							if (source === './data') {
 								markDataResolved();
-								return attributes.type === 'json' ? '\0data' : failingModule;
+
+								// Rollup 3 passes import attributes as assertions
+								const { attributes, assertions } = options as typeof options & {
+									assertions?: Record<string, string>;
+								};
+								const { type } = attributes ?? assertions ?? {};
+								return type === 'json' ? '\0data' : failingModule;
 							}
 							if (source === 'pkg') {
 								await dataResolved;
