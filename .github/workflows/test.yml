@@ -42,49 +42,11 @@ jobs:
         if: runner.os == 'Linux'
         run: pnpm type-check
 
-      - name: Test
-        run: pnpm test
-
-  # The main job tests the newest peers and the pinned Node.js. This job
-  # tests the oldest supported versions that package.json declares.
-  compatibility:
-    name: Compatibility (${{ matrix.name }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Rollup 3
-            install: rollup@3
-          - name: Vite 5
-            install: vite@5
-          - name: Vite 6
-            install: vite@6
-
-          # The suite runs on the pinned Node.js, which can run TypeScript,
-          # and runs the built package with Node.js 20
-          - name: Node.js 20
-            node: 20
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Setup Node.js, pnpm, and dependencies
-        uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
-        with:
-          cache: true
-          require-lockfile: true
-
-      - name: Install ${{ matrix.install }}
-        if: matrix.install
-        run: pnpm add --save-dev ${{ matrix.install }}
-
-      - name: Download Node.js ${{ matrix.node }}
-        if: matrix.node
-        run: echo "PACKAGE_TEST_NODE=$(pnpm dlx node@${{ matrix.node }} -p process.execPath | tail -1)" >> "$GITHUB_ENV"
+      # The suite runs on the pinned Node.js, which can run TypeScript. The
+      # built package is also run with the engines floor.
+      - name: Download Node.js 20.20.0
+        if: runner.os == 'Linux'
+        run: echo "PACKAGE_TEST_NODE=$(pnpm dlx node@20.20.0 -p process.execPath | tail -1)" >> "$GITHUB_ENV"
 
       - name: Test
         run: pnpm test

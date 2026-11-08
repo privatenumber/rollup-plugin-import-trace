@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'manten';
-import { rollup, type Plugin } from 'rollup';
+import type * as rollup4 from 'rollup';
+import type { Plugin } from 'rollup';
 import nodeResolve from '@rollup/plugin-node-resolve';
 import commonjs from '@rollup/plugin-commonjs';
 import { createFixture } from 'fs-fixture';
@@ -22,7 +23,13 @@ const throwingResolver = (
 	},
 });
 
-describe('Rollup', () => {
+/**
+ * The parts of a Rollup version's API the tests use. Rollup 3 is installed
+ * under an alias (rollup3) and cast to this type.
+ */
+export type Rollup = Pick<typeof rollup4, 'rollup' | 'VERSION'>;
+
+export const rollupSpecs = ({ rollup, VERSION }: Rollup) => describe(`Rollup ${VERSION.split('.', 1)[0]}`, () => {
 	describe('build phase', () => {
 		test('syntax error', async () => {
 			await using fixture = await createFixture({

@@ -1,72 +1,83 @@
 import type { Server } from 'node:http';
 import { stripVTControlCharacters } from 'node:util';
-import {
-	build,
-	createLogger,
-	createServer,
-	type InlineConfig,
-} from 'vite';
+import type * as vite7 from 'vite';
 
 /**
- * Run a Vite library build of the fixture's index.js
+ * The parts of a Vite version's API the tests use. Older versions are
+ * installed under aliases (vite5, vite6) and cast to this type.
  */
-export const viteBuild = (
-	root: string,
-	config: InlineConfig,
-) => build({
-	root,
-	configFile: false,
-	envFile: false,
-	logLevel: 'silent',
-	...config,
-	build: {
-		write: false,
-		lib: {
-			entry: 'index.js',
-			formats: ['es'],
-		},
-	},
-});
+export type Vite = Pick<typeof vite7, 'build' | 'createLogger' | 'createServer' | 'version'>;
 
 /**
- * Start a Vite dev server. Dispose it with `await using`.
- *
- * `errors` collects the messages Vite logs for failed requests.
- * Vite logs the error object after the plugin's error middleware patched it.
+ * Build and dev server helpers for one Vite version
  */
-export const viteServe = async (
-	root: string,
-	config: InlineConfig,
-) => {
-	const errors: string[] = [];
-	const logger = createLogger('silent');
-	// Vite colors messages when it detects CI
-	logger.error = (message) => {
-		errors.push(stripVTControlCharacters(message));
-	};
-
-	const server = await createServer({
+export const createViteHelpers = (vite: Vite) => {
+	/**
+	 * Run a Vite library build of the fixture's index.js
+	 */
+	const viteBuild = (
+		root: string,
+		config: vite7.InlineConfig,
+	) => vite.build({
 		root,
 		configFile: false,
 		envFile: false,
-		customLogger: logger,
-		server: {
-			port: 0,
-			// Disable file watching to allow clean process exit
-			watch: null,
-		},
+		logLevel: 'silent',
 		...config,
+		build: {
+			write: false,
+			lib: {
+				entry: 'index.js',
+				formats: ['es'],
+			},
+		},
 	});
-	await server.listen();
+
+	/**
+	 * Start a Vite dev server. Dispose it with `await using`.
+	 *
+	 * `errors` collects the messages Vite logs for failed requests.
+	 * Vite logs the error object after the plugin's error middleware patched it.
+	 */
+	const viteServe = async (
+		root: string,
+		config: vite7.InlineConfig,
+	) => {
+		const errors: string[] = [];
+		const logger = vite.createLogger('silent');
+		// Vite colors messages when it detects CI
+		logger.error = (message) => {
+			errors.push(stripVTControlCharacters(message));
+		};
+
+		const server = await vite.createServer({
+			root,
+			configFile: false,
+			envFile: false,
+			customLogger: logger,
+			server: {
+				port: 0,
+				// Disable file watching to allow clean process exit
+				watch: null,
+			},
+			...config,
+		});
+		await server.listen();
+
+		return {
+			url: server.resolvedUrls!.local[0]!.replace(/\/$/, ''),
+			server,
+			errors,
+			[Symbol.asyncDispose]: async () => {
+				// Keep-alive connections otherwise hold server.close() open on Windows
+				(server.httpServer as Server | undefined)?.closeAllConnections();
+				await server.close();
+			},
+		};
+	};
 
 	return {
-		url: server.resolvedUrls!.local[0]!.replace(/\/$/, ''),
-		server,
-		errors,
-		[Symbol.asyncDispose]: async () => {
-			// Keep-alive connections otherwise hold server.close() open on Windows
-			(server.httpServer as Server | undefined)?.closeAllConnections();
-			await server.close();
-		},
+		viteBuild,
+		viteServe,
 	};
 };
