@@ -67,11 +67,12 @@ describe('Vite dev', () => {
 			return response.status;
 		};
 
-		// Watching is disabled, so each edit invalidates its module directly
+		// Watching is disabled, so each edit invalidates its module directly.
+		// The URL lookup avoids OS-specific paths: Vite IDs use forward slashes.
 		const { moduleGraph } = dev.server;
 		const edit = async (file: string, code: string) => {
 			await fixture.writeFile(file, code);
-			moduleGraph.invalidateModule(moduleGraph.getModuleById(fixture.getPath(file))!);
+			moduleGraph.invalidateModule((await moduleGraph.getModuleByUrl(`/${file}`))!);
 		};
 
 		for (const file of ['index.js', 'a.js', 'b.js', 'broken.js']) {
