@@ -1,11 +1,11 @@
 import type { PluginContext, RollupError } from 'rollup';
 import { attempt } from '../utils/attempt.ts';
 import { normalizePath } from '../utils/normalize-path.ts';
-import { createTimeout } from '../utils/timeout.ts';
+import { createDeadline } from '../utils/deadline.ts';
 import { walkImporters } from '../utils/walk-importers.ts';
 import { getErrorFiles } from '../get-error-file.ts';
 import { setImportTrace } from '../patch-error.ts';
-import { replayResolveRecords, type ResolveRecord } from './recover-edges.ts';
+import { createReplay, type ResolveRecord } from './recover-edges.ts';
 
 // Map each module to its first importer, and collect the entry modules, from
 // Rollup's module graph. IDs are normalized, so on Windows they no longer match
@@ -56,22 +56,12 @@ const getTrace = (
 const recoverTrace = async (
 	moduleId: string,
 	{ importerMap, entryIds }: ReturnType<typeof readModuleGraph>,
-	resolveRecords: ResolveRecord[],
-	context: PluginContext,
+	recoverImporter: ReturnType<typeof createReplay>,
 ) => {
-	// The original error reaches the caller only after recovery, so recovery
-	// gets a time budget
-	const timeout = createTimeout(replayTimeLimit);
 	let trace = getTrace(moduleId, importerMap);
 	while (!entryIds.has(trace[0]!)) {
 		const { length } = trace;
-		const finished = await replayResolveRecords(
-			trace[0]!,
-			importerMap,
-			resolveRecords,
-			context,
-			timeout,
-		);
+		const finished = await recoverImporter(trace[0]!, importerMap);
 		trace = getTrace(moduleId, importerMap);
 		if (!finished || trace.length === length) {
 			break;
@@ -96,11 +86,16 @@ export const attachImportTrace = async (
 		return;
 	}
 
+	// The original error reaches the caller only after recovery, so all of
+	// it, for every file, shares one time budget
+	using deadline = createDeadline(replayTimeLimit);
+	const recoverImporter = resolveRecords && createReplay(resolveRecords, context, deadline);
+
 	// Use the most specific file that the module graph can reach
 	const graph = readModuleGraph(context);
 	for (const moduleId of errorFiles) {
-		const trace = resolveRecords
-			? await recoverTrace(moduleId, graph, resolveRecords, context)
+		const trace = recoverImporter
+			? await recoverTrace(moduleId, graph, recoverImporter)
 			: getTrace(moduleId, graph.importerMap);
 
 		// A chain that does not reach an entry module would look complete but

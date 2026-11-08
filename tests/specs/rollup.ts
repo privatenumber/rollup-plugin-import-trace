@@ -304,6 +304,54 @@ export const rollupSpecs = ({ rollup, VERSION }: Rollup) => describe(`Rollup ${V
 			expectTrace(error, fixture, ['index.js', 'a.js', 'node_modules/pkg/index.js']);
 		});
 
+		// Each resolver loads its module with its dependencies before it
+		// returns, so the syntax error at the end fails every level, and every
+		// edge in the chain is dropped. The imports are absolute paths, as
+		// @rollup/plugin-commonjs resolves them, so each level is recovered
+		// exactly, but needs another scan of the records. Each record is still
+		// replayed at most once.
+		test('a chain of dropped edges replays each record once', async () => {
+			const depth = 30;
+			await using fixture = await createFixture();
+			const getPath = (level: number) => fixture.getPath(`m${level}.js`);
+			await fixture.writeFile('index.js', `import ${JSON.stringify(getPath(1))};`);
+			for (let level = 1; level < depth; level += 1) {
+				await fixture.writeFile(`m${level}.js`, `import ${JSON.stringify(getPath(level + 1))};`);
+			}
+			await fixture.writeFile(`m${depth}.js`, 'export const value = "unclosed');
+
+			let resolveCalls = 0;
+			const error = await getBuildError(() => rollup({
+				input: fixture.getPath('index.js'),
+				plugins: [
+					importTrace(),
+					{
+						name: 'loading-resolver',
+						async resolveId(source, importer) {
+							if (!importer || !source.startsWith(fixture.path)) {
+								return null;
+							}
+							resolveCalls += 1;
+							// eslint-disable-next-line unicorn/no-this-outside-of-class -- plugin context
+							await this.load({
+								id: source,
+								resolveDependencies: true,
+							});
+							return source;
+						},
+					},
+				],
+			}));
+
+			expectTrace(error, fixture, [
+				'index.js',
+				...Array.from({ length: depth }, (_, index) => `m${index + 1}.js`),
+			]);
+
+			// The build resolves each import once, and replay at most once more
+			expect(resolveCalls).toBeLessThanOrEqual(depth * 2);
+		});
+
 		// Replay must resolve with the original options. Without the import
 		// attribute, this resolver returns the failing module for a.js's import,
 		// which would report an edge that the build never had. a.js loads after
@@ -466,8 +514,51 @@ export const rollupSpecs = ({ rollup, VERSION }: Rollup) => describe(`Rollup ${V
 			expectNoTrace(error);
 		});
 
+		// The package's own import fails with an error whose id is the package.
+		// Replaying that import names the package as the error's file, but the
+		// package does not import itself, so the edge must come from the import
+		// of the package.
+		test('an error that names its importer', async () => {
+			await using fixture = await createFixture({
+				'pkg.js': 'import "./dep.js";',
+			});
+			const packagePath = fixture.getPath('pkg.js');
+			const entry = `import ${JSON.stringify(packagePath)};`;
+
+			const error = await getBuildError(() => rollup({
+				input: 'entry',
+				plugins: [
+					importTrace(),
+					{
+						name: 'loading-resolver',
+						async resolveId(source) {
+							if (source === 'entry') {
+								return source;
+							}
+							if (source === packagePath) {
+								// eslint-disable-next-line unicorn/no-this-outside-of-class -- plugin context
+								await this.load({
+									id: packagePath,
+									resolveDependencies: true,
+								});
+								return packagePath;
+							}
+							if (source === './dep.js') {
+								throw Object.assign(new Error('Unsupported import'), { id: packagePath });
+							}
+							return null;
+						},
+						load: id => (id === 'entry' ? entry : null),
+					},
+				],
+			}));
+
+			expect(error.importTrace).toStrictEqual(['entry', packagePath.replaceAll('\\', '/')]);
+		});
+
 		// Replay runs resolvers after the build has failed, and one may never
 		// settle. The original error still reaches the caller, without a trace.
+		// The error names two files, which share one time budget.
 		test('a resolver that never settles on replay', async () => {
 			await using fixture = await createFixture({
 				'index.js': 'import "./a.js";',
@@ -475,6 +566,7 @@ export const rollupSpecs = ({ rollup, VERSION }: Rollup) => describe(`Rollup ${V
 			});
 
 			let calls = 0;
+			const startedAt = performance.now();
 			const error = await getBuildError(() => rollup({
 				input: fixture.getPath('index.js'),
 				plugins: [
@@ -489,6 +581,11 @@ export const rollupSpecs = ({ rollup, VERSION }: Rollup) => describe(`Rollup ${V
 							if (calls === 1) {
 								throw Object.assign(new Error('original'), {
 									path: fixture.getPath('node_modules/pkg/index.js'),
+									loc: {
+										file: fixture.getPath('node_modules/pkg/src/index.js'),
+										line: 1,
+										column: 0,
+									},
 								});
 							}
 							return new Promise<never>(() => {});
@@ -499,7 +596,8 @@ export const rollupSpecs = ({ rollup, VERSION }: Rollup) => describe(`Rollup ${V
 
 			expect(error.message).toMatch('original');
 			expectNoTrace(error);
-		}, 10_000);
+			expect(performance.now() - startedAt).toBeLessThan(8000);
+		}, 15_000);
 
 		test('the plugin is listed after the throwing resolver', async () => {
 			await using fixture = await createFixture({

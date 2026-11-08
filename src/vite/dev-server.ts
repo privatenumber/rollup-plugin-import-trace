@@ -34,10 +34,11 @@ export type ViteDevServer = {
 	};
 };
 
-// The shortest chain from a module that nothing imports. Following only the
-// first importer is not enough: Vite re-adds an importer when an edit restores
-// its import, so the first one can be part of a cycle, and the chain would
-// start in the middle of it.
+// The shortest chain from a module that nothing imports, or that closes an
+// import cycle when every module has an importer. Following only the first
+// importer is not enough: Vite re-adds an importer when an edit restores its
+// import, so the first one can be part of a cycle, and the chain would start
+// in the middle of it.
 // server.moduleGraph merges the client and SSR graphs, and its importers
 // include modules that import the module only in SSR. The middleware handles
 // browser requests, so only client importers are followed.
@@ -48,7 +49,7 @@ const getViteTrace = (module_: ViteModule | undefined) => (
 			node => [...node.importers].filter(importer => (
 				importer.id && importer.clientImportedModules.has(node)
 			)),
-		)?.map(node => node.id!) ?? []
+		).map(node => node.id!)
 		: []
 );
 

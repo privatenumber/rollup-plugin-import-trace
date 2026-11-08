@@ -139,4 +139,42 @@ describe('Package', () => {
 			expect(inspected).toContain(formatTrace(fixture, ['index.js', 'broken.js']));
 		});
 	}
+
+	// Replay can wait on a resolver that never settles. The recovery deadline
+	// must keep the process alive until it ends, or Rollup replaces the
+	// original error with "Unexpected early exit". A test runner keeps its own
+	// timers alive, so this runs in a separate process with nothing else.
+	test('a resolver that never settles on replay keeps the original error', async () => {
+		await using fixture = await createFixture({
+			'index.js': 'import "pkg";',
+			'build.mjs': `
+				import { rollup } from 'rollup';
+				import { importTrace } from 'rollup-plugin-import-trace';
+
+				let calls = 0;
+				rollup({
+					input: 'index.js',
+					plugins: [importTrace(), {
+						name: 'hanging-resolver',
+						resolveId(source) {
+							if (source !== 'pkg') {
+								return null;
+							}
+							calls += 1;
+							if (calls === 1) {
+								throw Object.assign(new Error('original'), { path: 'missing.js' });
+							}
+							return new Promise(() => {});
+						},
+					}],
+				}).catch((error) => {
+					console.log(error.message);
+				});
+			`,
+			node_modules: linkDependencies(['rollup']),
+		});
+
+		const { stdout } = await spawn(process.execPath, ['build.mjs'], { cwd: fixture.path });
+		expect(stdout).toBe('original');
+	}, 15_000);
 });

@@ -165,6 +165,31 @@ export const viteDevSpecs = (vite: Vite) => describe(`Vite ${vite.version.split(
 		);
 	}, timeout);
 
+	// Every module has an importer when the entry is part of a cycle. The
+	// trace starts at the module that closes the cycle.
+	test('entry that is part of an import cycle', async ({ signal }) => {
+		await using fixture = await createFixture({
+			'main.js': 'import "./a.js";',
+			'a.js': 'import "./b.js";',
+			'b.js': 'import "./main.js"; import "./broken.js";',
+			'broken.js': 'export const value = "unclosed',
+		});
+		await using dev = await viteServe(fixture.path, { plugins: [importTrace()] });
+
+		for (const file of ['main.js', 'a.js', 'b.js']) {
+			const response = await fetch(`${dev.url}/${file}`, { signal });
+			expect(response.status).toBe(200);
+		}
+		const response = await fetch(`${dev.url}/broken.js`, { signal });
+		expect(response.status).toBe(500);
+
+		const requestErrors = dev.errors.filter(message => message.startsWith('Internal server error'));
+		expect(requestErrors).toHaveLength(1);
+		expect(requestErrors[0]).toContain(
+			formatTrace(fixture, ['main.js', 'a.js', 'b.js', 'broken.js']),
+		);
+	}, timeout);
+
 	test('no trace for a module without importers', async ({ signal }) => {
 		await using fixture = await createFixture({
 			'broken.js': 'export const value = "unclosed',
